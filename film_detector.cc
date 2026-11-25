@@ -649,25 +649,77 @@ struct ClassInfo {
   bool light_clipped = false;
 };
 
-// Classifies every canvas pixel (see the file comment, step 4). Levels: ref is the 99.9th percentile luminance and
-// refc the per channel 99.9th percentiles (bare light when some is visible, else the thinnest film); m(i), the
-// minimum over channels of value / refc, is how close a pixel is to that reference in every channel (log2).
-// Allocates (transiently, canvas sized): ~6 float planes and ~17 byte masks, and component label planes, of which at
-// most 6 float or label planes and ~6 byte masks are live at once; the holder test adds one float plane only when a
-// large dark part at the border fails its per-pixel flatness test.
-void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
-  const int W = cv.w, H = cv.h;
-  const size_t N = (size_t)W * H;
+// classify's working state, which its steps below share: each step reads what earlier steps set and sets its own
+// members (named in its comment). The canvas planes are allocated by the steps, as classify allocated them.
+struct ClassifyState {
+  ClassifyState(const Canvas& c, FilmPolarity p, ClassInfo& i)
+      : cv(c), pol(p), ci(i), W(c.w), H(c.h), N((size_t)c.w * c.h) {}
+  const Canvas& cv;
+  const FilmPolarity pol;
+  ClassInfo& ci;
+  const int W, H;
+  const size_t N;
+  // classify_levels
   Plane lum;
-  lum.init(W, H);
   size_t nvalid = 0;
+  size_t step = 1;
+  float ref = 0.0f;
+  float refc[3] = {0.0f, 0.0f, 0.0f};
+  float black_frac = 0.0f;
+  // classify_clipped_light (light grows in the steps up to classify_unclipped_holes)
+  std::vector<uint8_t> black, light, inside;
+  size_t nclip = 0;
+  size_t nlight = 0;
+  // classify_levels_and_flatness
+  std::vector<float> mall, grad;
+  // classify_film_base
+  float base_lum = 0.0f, base_q = 0.0f;
+  // classify_slide_dark
+  float slide_dark = -100.0f;
+  // classify_holder
+  std::vector<uint8_t> holder;
+
+  // Keeps the parts of mask that can be bare light: reaching the outside or hole-sized (<= 0.5% of the image), and
+  // on average at least lum_min bright.
+  void keep_light_parts(std::vector<uint8_t>& m, float lum_min) const {
+    Labels L;
+    components(m, inside, lum, W, H, L);
+    std::vector<uint8_t> keep(L.area.size(), 0);
+    for (size_t k = 0; k < L.area.size(); ++k) {
+      const double mean = L.sum[k] / std::max(1, L.area[k]);
+      keep[k] = (L.touch[k] || L.area[k] <= 0.005 * (double)nvalid) && mean >= lum_min;
+    }
+    for (size_t i = 0; i < N; ++i) m[i] = (m[i] && keep[L.lab[i]]) ? 1 : 0;
+  }
+  // DARK by level alone (the holder test adds large flat parts). Negative: very dense, or dense and less orange
+  // than the base (flare on a carrier is less orange than film, which keeps its mask; relative to the measured base,
+  // so the lamp's colour cancels). Slide: near its densest mode.
+  bool dense_dark(size_t i) const {
+    const float l = lum.d[i];
+    if (pol == FILM_POSITIVE) return std::log2(std::max(l, 1e-7f) / ref) <= slide_dark;
+    const float q = std::log2(std::max(cv.r.d[i], 1e-7f) / std::max(cv.b.d[i], 1e-7f));
+    return l < 0.006f * base_lum || (l < 0.02f * base_lum && q < base_q - 0.10f) ||
+           (l < 0.06f * base_lum && q < base_q - 0.6f);
+  }
+};
+
+// The levels: the luminance plane (lum), the valid pixels (nvalid), the percentiles' step, ref, refc and black_frac
+// (see classify).
+void classify_levels(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  Plane& lum = s.lum;
+  lum.init(W, H);
+  size_t& nvalid = s.nvalid;
   for (size_t i = 0; i < N; ++i) {
     if (!cv.valid[i]) continue;
     nvalid++;
     lum.d[i] = (cv.r.d[i] + cv.g.d[i] + cv.b.d[i]) * (1.0f / 3.0f);
   }
   // Percentiles from every step-th valid pixel (at most 200k).
-  const size_t step = std::max<size_t>(1, nvalid / 200000);
+  s.step = std::max<size_t>(1, nvalid / 200000);
+  const size_t step = s.step;
   std::vector<float> lv, rv[3];
   for (size_t i = 0, k = 0; i < N; ++i) {
     if (!cv.valid[i]) continue;
@@ -678,14 +730,25 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       rv[2].push_back(cv.b.d[i]);
     }
   }
-  const float ref = std::max(1e-6f, percentile(lv, 0.999));
-  float refc[3];
-  for (int c = 0; c < 3; ++c) refc[c] = std::max(1e-6f, percentile(rv[c], 0.999));
-  const float black_frac = (pol == FILM_POSITIVE) ? 0.0002f : 0.002f;
+  s.ref = std::max(1e-6f, percentile(lv, 0.999));
+  for (int c = 0; c < 3; ++c) s.refc[c] = std::max(1e-6f, percentile(rv[c], 0.999));
+  s.black_frac = (s.pol == FILM_POSITIVE) ? 0.0002f : 0.002f;
+}
 
-  // Black (no light at all) and clipped light.
-  std::vector<uint8_t> black(N, 0), light(N, 0);
-  size_t nclip = 0;
+// Black (no light at all) and clipped light: black, light (the clipped parts that can be bare light), inside (what
+// is not outside for light), nclip, nlight; sets ci.light_clipped.
+void classify_clipped_light(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const float ref = s.ref, black_frac = s.black_frac;
+  std::vector<uint8_t>& black = s.black;
+  std::vector<uint8_t>& light = s.light;
+  std::vector<uint8_t>& inside = s.inside;
+  size_t& nclip = s.nclip;
+  black.assign(N, 0);
+  light.assign(N, 0);
   for (size_t i = 0; i < N; ++i) {
     if (!cv.valid[i]) continue;
     if (lum.d[i] < black_frac * ref) black[i] = 1;
@@ -696,33 +759,34 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   }
   // What counts as outside for light: the image border, or the dark carrier (light seen through a holder's aperture
   // borders the holder), widened by 3 px across the blended edge between light and carrier.
-  std::vector<uint8_t> inside(N, 0);
+  inside.assign(N, 0);
   {
     std::vector<uint8_t> outside(N, 0);
     for (size_t i = 0; i < N; ++i) outside[i] = (!cv.valid[i] || lum.d[i] < 0.01f * ref) ? 1 : 0;
     dilate(outside, W, H, 3);
     for (size_t i = 0; i < N; ++i) inside[i] = outside[i] ? 0 : 1;
   }
-  // Keeps the parts of mask that can be bare light: reaching the outside or hole-sized (<= 0.5% of the image), and
-  // on average at least lum_min bright.
-  auto keep_light_parts = [&](std::vector<uint8_t>& m, float lum_min) {
-    Labels L;
-    components(m, inside, lum, W, H, L);
-    std::vector<uint8_t> keep(L.area.size(), 0);
-    for (size_t k = 0; k < L.area.size(); ++k) {
-      const double mean = L.sum[k] / std::max(1, L.area[k]);
-      keep[k] = (L.touch[k] || L.area[k] <= 0.005 * (double)nvalid) && mean >= lum_min;
-    }
-    for (size_t i = 0; i < N; ++i) m[i] = (m[i] && keep[L.lab[i]]) ? 1 : 0;
-  };
   if (nclip) {
-    keep_light_parts(light, 0.65f * ref);
-    ci.light_clipped = true;
+    s.keep_light_parts(light, 0.65f * ref);
+    s.ci.light_clipped = true;
   }
-  size_t nlight = 0;
+  size_t& nlight = s.nlight;
   for (size_t i = 0; i < N; ++i) nlight += light[i];
+}
+
+// m(i) per pixel (mall) and the local flatness (grad); sets ci.logl.
+void classify_levels_and_flatness(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const float ref = s.ref, black_frac = s.black_frac;
+  const float* refc = s.refc;
+  const std::vector<uint8_t>& black = s.black;
+  ClassInfo& ci = s.ci;
   // m(i): log2 of the minimum over channels of value / refc.
-  std::vector<float> mall(N, -100.0f);
+  std::vector<float>& mall = s.mall;
+  mall.assign(N, -100.0f);
   for (size_t i = 0; i < N; ++i) {
     if (!cv.valid[i] || black[i]) continue;
     const float m = std::min({cv.r.d[i] / refc[0], cv.g.d[i] / refc[1], cv.b.d[i] / refc[2]});
@@ -731,7 +795,8 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel (the 3 x 3 operator scaled by 1/8).
   // Floor at black_frac * ref when computing gradients so zero-clipped sensor noise in black borders does not create
   // multi-stop log2 spikes against adjacent near-black pixels.
-  std::vector<float> grad(N, 0.0f);
+  std::vector<float>& grad = s.grad;
+  grad.assign(N, 0.0f);
   ci.logl.assign(N, -20.0f);
   {
     std::vector<float>& ll = ci.logl;
@@ -750,6 +815,24 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       }
     }
   }
+}
+
+// Bare light that did not clip, by polarity: a slide's bright flat parts at the border or hole-sized, a negative's
+// brightest separated mode beside flat film base, or the unclipped light around partly clipped light. Adds to light.
+void classify_bare_light(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const FilmPolarity pol = s.pol;
+  const size_t nvalid = s.nvalid, step = s.step, nlight = s.nlight;
+  const float ref = s.ref;
+  const std::vector<uint8_t>& black = s.black;
+  const std::vector<uint8_t>& inside = s.inside;
+  std::vector<uint8_t>& light = s.light;
+  const std::vector<float>& mall = s.mall;
+  const std::vector<float>& grad = s.grad;
+  const ClassInfo& ci = s.ci;
   if (pol == FILM_POSITIVE) {
     // Slide film: highlights are nearly as bright as bare light, so space decides: bright parts that reach the
     // image border (only the border: a slide's own rebate is dark and borders every frame) and are flat, or
@@ -838,7 +921,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         outside_film = tot == 0 || between < 0.25 * tot;
       }
       if (outside_film && flat + other > 0 && flat >= (valley ? 0.45 : 0.6) * (double)(flat + other)) {
-        keep_light_parts(cand, 0.5f * ref);
+        s.keep_light_parts(cand, 0.5f * ref);
         for (size_t i = 0; i < N; ++i) light[i] |= cand[i];
       }
     }
@@ -855,60 +938,78 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     for (size_t i = 0; i < N; ++i)
       if (L.lab[i] >= 0 && hit[L.lab[i]] && L.touch[L.lab[i]]) light[i] = 1;
   }
-  if (ci.light_clipped) {
-    // Clipped film is not bare light. A scan that clips the film base clips its thinnest picture too, and the two form
-    // one clipped part that reaches the border wherever the film runs off the image. Bare light is seen beside the
-    // film along straight lines: as a band (light past the film's end or along a holder's edge: at least 6 times as
-    // long as its mean thickness, as a base band below) or as an area around the film whose rows or columns are light
-    // from carrier to carrier (or the border). So a large clipped part (more than hole-sized, 0.5% of the image) that
-    // is not a band and lies mostly (over half its pixels) off such lines (light for >= 90% of the run between the
-    // carriers or borders, as a full non-image line in the rectangle search) is film: classed by level below.
-    std::vector<uint8_t> on_line(N, 0);
-    for (int cols = 0; cols < 2; ++cols) {
-      const int n = cols ? W : H, m = cols ? H : W;
-      for (int a = 0; a < n; ++a) {
-        auto at = [&](int b) { return cols ? (size_t)b * W + a : (size_t)a * W + b; };
-        for (int b = 0; b < m;) {
-          if (!inside[at(b)]) {
-            ++b;
-            continue;
-          }
-          int e = b, nl = 0;
-          for (; e < m && inside[at(e)]; ++e) nl += light[at(e)];
-          if (nl >= 0.9 * (e - b))
-            for (int k = b; k < e; ++k) on_line[at(k)] = 1;
-          b = e;
+}
+
+// Clipped film is not bare light (the comment inside): removes such parts from light. Called when the light is
+// clipped.
+void classify_clipped_film(ClassifyState& s) {
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const size_t nvalid = s.nvalid;
+  const std::vector<uint8_t>& inside = s.inside;
+  std::vector<uint8_t>& light = s.light;
+  // Clipped film is not bare light. A scan that clips the film base clips its thinnest picture too, and the two form
+  // one clipped part that reaches the border wherever the film runs off the image. Bare light is seen beside the
+  // film along straight lines: as a band (light past the film's end or along a holder's edge: at least 6 times as
+  // long as its mean thickness, as a base band below) or as an area around the film whose rows or columns are light
+  // from carrier to carrier (or the border). So a large clipped part (more than hole-sized, 0.5% of the image) that
+  // is not a band and lies mostly (over half its pixels) off such lines (light for >= 90% of the run between the
+  // carriers or borders, as a full non-image line in the rectangle search) is film: classed by level below.
+  std::vector<uint8_t> on_line(N, 0);
+  for (int cols = 0; cols < 2; ++cols) {
+    const int n = cols ? W : H, m = cols ? H : W;
+    for (int a = 0; a < n; ++a) {
+      auto at = [&](int b) { return cols ? (size_t)b * W + a : (size_t)a * W + b; };
+      for (int b = 0; b < m;) {
+        if (!inside[at(b)]) {
+          ++b;
+          continue;
         }
+        int e = b, nl = 0;
+        for (; e < m && inside[at(e)]; ++e) nl += light[at(e)];
+        if (nl >= 0.9 * (e - b))
+          for (int k = b; k < e; ++k) on_line[at(k)] = 1;
+        b = e;
       }
     }
-    Labels L;
-    components(light, inside, lum, W, H, L);
-    const size_t nk = L.area.size();
-    std::vector<int> on(nk, 0), bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
-    for (size_t i = 0; i < N; ++i) {
-      const int k = L.lab[i];
-      if (k < 0) continue;
-      const int x = (int)(i % W), y = (int)(i / W);
-      on[k] += on_line[i];
-      bx0[k] = std::min(bx0[k], x);
-      bx1[k] = std::max(bx1[k], x);
-      by0[k] = std::min(by0[k], y);
-      by1[k] = std::max(by1[k], y);
-    }
-    std::vector<uint8_t> film_part(nk, 0);
-    for (size_t k = 0; k < nk; ++k) {
-      const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
-      const bool band = span >= 6.0 * L.area[k] / span;
-      film_part[k] = L.area[k] > 0.005 * (double)nvalid && !band && 2 * on[k] < L.area[k];
-    }
-    for (size_t i = 0; i < N; ++i)
-      if (L.lab[i] >= 0 && film_part[L.lab[i]]) light[i] = 0;
   }
-  // The blended edge of light counts as light.
-  dilate(light, W, H, 2);
+  Labels L;
+  components(light, inside, lum, W, H, L);
+  const size_t nk = L.area.size();
+  std::vector<int> on(nk, 0), bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
+  for (size_t i = 0; i < N; ++i) {
+    const int k = L.lab[i];
+    if (k < 0) continue;
+    const int x = (int)(i % W), y = (int)(i / W);
+    on[k] += on_line[i];
+    bx0[k] = std::min(bx0[k], x);
+    bx1[k] = std::max(bx1[k], x);
+    by0[k] = std::min(by0[k], y);
+    by1[k] = std::max(by1[k], y);
+  }
+  std::vector<uint8_t> film_part(nk, 0);
+  for (size_t k = 0; k < nk; ++k) {
+    const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
+    const bool band = span >= 6.0 * L.area[k] / span;
+    film_part[k] = L.area[k] > 0.005 * (double)nvalid && !band && 2 * on[k] < L.area[k];
+  }
   for (size_t i = 0; i < N; ++i)
-    if (black[i] || !cv.valid[i]) light[i] = 0;
+    if (L.lab[i] >= 0 && film_part[L.lab[i]]) light[i] = 0;
+}
 
+// Film base: ci.base, ci.base_valid, and base_lum and base_q (the comment inside).
+void classify_film_base(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const FilmPolarity pol = s.pol;
+  const size_t nvalid = s.nvalid, step = s.step, nlight = s.nlight;
+  const std::vector<uint8_t>& black = s.black;
+  const std::vector<uint8_t>& light = s.light;
+  const std::vector<float>& mall = s.mall;
+  ClassInfo& ci = s.ci;
   // Film base. A first estimate from the film's percentiles (the thinnest film for a negative, the densest for a
   // slide). For a negative then the brightest mode of m (modes holding >= 0.4% of the film) whose pixels (within 0.15
   // stop) form large connected regions, rebate bands and gaps (parts of >= 0.15% of the valid canvas, >= 0.3% in all),
@@ -983,56 +1084,76 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         for (int c = 0; c < 3; ++c) ci.base[c] = std::max(1e-6f, percentile(cr[c], 0.5));
     }
   }
-  const float base_lum = (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f;
-  const float base_q = std::log2(ci.base[0] / ci.base[2]);  // how orange the base is (log2 R / B)
+  s.base_lum = (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f;
+  s.base_q = std::log2(ci.base[0] / ci.base[2]);  // how orange the base is (log2 R / B)
+}
 
-  // Unclipped sprocket holes and light patches: small parts brighter than the base by 0.35 stop in every channel
-  // (no part of a negative is thinner than its own base).
-  if (pol == FILM_NEGATIVE && ci.base_valid) {
-    std::vector<uint8_t> br(N, 0);
-    const float k = std::exp2(0.35f);
-    for (size_t i = 0; i < N; ++i)
-      br[i] = (cv.valid[i] && !black[i] && !light[i] && cv.r.d[i] > k * ci.base[0] && cv.g.d[i] > k * ci.base[1] &&
-               cv.b.d[i] > k * ci.base[2]) ? 1 : 0;
-    Labels L;
-    components(br, cv.valid, lum, W, H, L);
-    std::vector<uint8_t> add(N, 0);
-    bool any = false;
-    for (size_t i = 0; i < N; ++i) {
-      if (L.lab[i] < 0) continue;
-      const int a = L.area[L.lab[i]];
-      if (a >= 4 && (a <= 0.005 * (double)nvalid || L.touch[L.lab[i]])) {
-        add[i] = 1;
-        any = true;
-      }
-    }
-    if (any) {
-      dilate(add, W, H, 1);
-      for (size_t i = 0; i < N; ++i)
-        if (add[i] && !black[i] && cv.valid[i]) light[i] = 1;
+// Unclipped sprocket holes and light patches: small parts brighter than the base by 0.35 stop in every channel
+// (no part of a negative is thinner than its own base). Adds to light; called on a negative with a base.
+void classify_unclipped_holes(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const size_t nvalid = s.nvalid;
+  const std::vector<uint8_t>& black = s.black;
+  std::vector<uint8_t>& light = s.light;
+  const ClassInfo& ci = s.ci;
+  std::vector<uint8_t> br(N, 0);
+  const float k = std::exp2(0.35f);
+  for (size_t i = 0; i < N; ++i)
+    br[i] = (cv.valid[i] && !black[i] && !light[i] && cv.r.d[i] > k * ci.base[0] && cv.g.d[i] > k * ci.base[1] &&
+             cv.b.d[i] > k * ci.base[2]) ? 1 : 0;
+  Labels L;
+  components(br, cv.valid, lum, W, H, L);
+  std::vector<uint8_t> add(N, 0);
+  bool any = false;
+  for (size_t i = 0; i < N; ++i) {
+    if (L.lab[i] < 0) continue;
+    const int a = L.area[L.lab[i]];
+    if (a >= 4 && (a <= 0.005 * (double)nvalid || L.touch[L.lab[i]])) {
+      add[i] = 1;
+      any = true;
     }
   }
-  // Slide: its unexposed film is the densest mode; within 0.7 stop of it is DARK.
-  float slide_dark = -100.0f;
-  if (pol == FILM_POSITIVE) {
-    std::vector<float> rel(N, -100.0f);
+  if (any) {
+    dilate(add, W, H, 1);
     for (size_t i = 0; i < N; ++i)
-      if (cv.valid[i]) rel[i] = std::log2(std::max(lum.d[i], 1e-7f) / ref);
-    ModeHist mh;
-    mh.build(rel, [&](size_t i) { return cv.valid[i] && !light[i]; }, step);
-    const std::vector<int> pk = mh.peaks(0.02);
-    slide_dark = pk.empty() ? std::log2(0.006f) : mh.center(pk.front()) + 0.7f;
+      if (add[i] && !black[i] && cv.valid[i]) light[i] = 1;
   }
-  // DARK by level alone (the holder test below adds large flat parts). Negative: very dense, or dense and less orange
-  // than the base (flare on a carrier is less orange than film, which keeps its mask; relative to the measured base,
-  // so the lamp's colour cancels). Slide: near its densest mode.
-  auto dense_dark = [&](size_t i) {
-    const float l = lum.d[i];
-    if (pol == FILM_POSITIVE) return std::log2(std::max(l, 1e-7f) / ref) <= slide_dark;
-    const float q = std::log2(std::max(cv.r.d[i], 1e-7f) / std::max(cv.b.d[i], 1e-7f));
-    return l < 0.006f * base_lum || (l < 0.02f * base_lum && q < base_q - 0.10f) ||
-           (l < 0.06f * base_lum && q < base_q - 0.6f);
-  };
+}
+
+// Slide: its unexposed film is the densest mode; within 0.7 stop of it is DARK (slide_dark). Called on a slide.
+void classify_slide_dark(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const size_t step = s.step;
+  const float ref = s.ref;
+  const std::vector<uint8_t>& light = s.light;
+  std::vector<float> rel(N, -100.0f);
+  for (size_t i = 0; i < N; ++i)
+    if (cv.valid[i]) rel[i] = std::log2(std::max(lum.d[i], 1e-7f) / ref);
+  ModeHist mh;
+  mh.build(rel, [&](size_t i) { return cv.valid[i] && !light[i]; }, step);
+  const std::vector<int> pk = mh.peaks(0.02);
+  s.slide_dark = pk.empty() ? std::log2(0.006f) : mh.center(pk.front()) + 0.7f;
+}
+
+// Holder / carrier (the comment inside): holder.
+void classify_holder(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  const FilmPolarity pol = s.pol;
+  const size_t nvalid = s.nvalid;
+  const float ref = s.ref, black_frac = s.black_frac, base_lum = s.base_lum, base_q = s.base_q;
+  const std::vector<uint8_t>& light = s.light;
+  const std::vector<float>& grad = s.grad;
+  const ClassInfo& ci = s.ci;
+  auto dense_dark = [&s](size_t i) { return s.dense_dark(i); };
+  std::vector<uint8_t>& holder = s.holder;
   // Holder / carrier: large (>= 1% of the image), flat parts that reach the border, darker than 2% of the base
   // (negative) or 1% of the light (slide); flare can keep them above black.
   // A holder lit by stray light can be far brighter than that (ce34e25826: a grey holder at 10% of the base, taken for
@@ -1042,7 +1163,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   // stop is a holder candidate too. A part mostly of such pixels is holder when it is flat per pixel and lies along a
   // whole side of the image, as a holder's mask does: dense picture lit by a warm lamp can have that colour too. A
   // film without a mask (black and white) gives no such part.
-  std::vector<uint8_t> holder(N, 0);
+  holder.assign(N, 0);
   {
     const float lim = pol == FILM_NEGATIVE ? 0.02f * base_lum : 0.01f * ref;
     auto lamp_coloured = [&](size_t i) {
@@ -1214,6 +1335,19 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     }
     for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
   }
+}
+
+// The classes: LIGHT, then DARK (black, holder or dark by level), then on a negative BASE (within kBaseMargin of the
+// base in every channel) or IMAGE; ci.cls.
+void classify_assign(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const size_t N = s.N;
+  const FilmPolarity pol = s.pol;
+  const std::vector<uint8_t>& black = s.black;
+  const std::vector<uint8_t>& light = s.light;
+  const std::vector<uint8_t>& holder = s.holder;
+  auto dense_dark = [&s](size_t i) { return s.dense_dark(i); };
+  ClassInfo& ci = s.ci;
   ci.cls.assign(N, CL_INVALID);
   for (size_t i = 0; i < N; ++i) {
     if (!cv.valid[i]) continue;
@@ -1233,119 +1367,171 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       ci.cls[i] = CL_IMAGE;
     }
   }
-  if (pol == FILM_NEGATIVE && ci.base_valid) {
-    // Holder-framed negatives with no visible rebate: the brightest mode of the film is a bright picture region
-    // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture: the
-    // base parts that reach the central box or are not lines. A part outside it that spans half the canvas along x or
-    // y (a rebate band beside the frame, a gap between frames) stays base, so a strip with a large base fraction keeps
-    // the gaps and rebate that bound its frames.
-    size_t nb = 0, ni = 0, ndark = 0, nb_c = 0, n_c = 0;
-    const int cx0 = W / 4, cx1 = W - W / 4, cy0 = H / 4, cy1 = H - H / 4;
-    for (int y = 0; y < H; ++y) {
-      const bool in_y = (y >= cy0 && y < cy1);
-      for (int x = 0; x < W; ++x) {
-        const uint8_t c = ci.cls[(size_t)y * W + x];
-        if (c == CL_BASE) nb++;
-        else if (c == CL_IMAGE) ni++;
-        else if (c == CL_DARK) ndark++;
-        if (in_y && x >= cx0 && x < cx1 && (c == CL_BASE || c == CL_IMAGE)) {
-          n_c++;
-          if (c == CL_BASE) nb_c++;
-        }
-      }
-    }
-    if (nb + ni > 0 && nb > 0.30 * (nb + ni) && n_c > 0 && nb_c > 0.30 * n_c) {
-      std::vector<uint8_t> bm(N, 0);
-      for (size_t i = 0; i < N; ++i) bm[i] = ci.cls[i] == CL_BASE ? 1 : 0;
-      Labels L;
-      components(bm, cv.valid, lum, W, H, L);
-      const size_t nk = L.area.size();
-      std::vector<uint8_t> central(nk, 0);
-      std::vector<int> bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
-      for (int y = 0; y < H; ++y) {
-        for (int x = 0; x < W; ++x) {
-          const int k = L.lab[(size_t)y * W + x];
-          if (k < 0) continue;
-          if (y >= cy0 && y < cy1 && x >= cx0 && x < cx1) central[k] = 1;
-          bx0[k] = std::min(bx0[k], x);
-          bx1[k] = std::max(bx1[k], x);
-          by0[k] = std::min(by0[k], y);
-          by1[k] = std::max(by1[k], y);
-        }
-      }
-      for (size_t i = 0; i < N; ++i) {
-        const int k = L.lab[i];
-        if (k < 0) continue;
-        // A band: long and thin, as a rebate beside the frame or a gap between frames is. Its mean thickness (area
-        // over its length) is at least about a millimetre (1% of the canvas's short side, the width of a 35mm gap on
-        // a frame filling the image), so a printed or drawn line a pixel or two thick is picture, and its length is at
-        // least 6 times that thickness, so a bright picture region that merely reaches half the canvas (a white patch
-        // of a test chart, 4 times as long as thick) is picture too; taking such patches for base cuts the crop short.
-        const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
-        const double thick = (double)L.area[k] / span;
-        const bool band = thick >= std::max(2.0, 0.01 * std::min(W, H)) && span >= 6.0 * thick;
-        const bool line = (2 * (bx1[k] - bx0[k] + 1) >= W || 2 * (by1[k] - by0[k] + 1) >= H) && band;
-        if (central[k] || !line) ci.cls[i] = CL_IMAGE;
-      }
-    } else if (nlight > 0 || ndark > 0) {
-      // Vignetted light sources: an inter-frame gap or border rebate line whose ends reach ci.base (>= 15% CL_BASE)
-      // can dip up to 0.60 stop below ci.base across its middle while keeping film-base chromaticity (mean spread
-      // <= 0.35 stop, or <= 0.08 stop on unclipped interiors so low-density picture highlights are not promoted).
-      const float k2 = std::exp2(-0.60f);
-      auto near_base = [&](size_t i) {
-        return cv.r.d[i] >= ci.base[0] * k2 && cv.g.d[i] >= ci.base[1] * k2 && cv.b.d[i] >= ci.base[2] * k2;
-      };
-      auto chroma_spread = [&](size_t i) {
-        const float dr = std::log2(std::max(cv.r.d[i], 1e-7f) / ci.base[0]);
-        const float dg = std::log2(std::max(cv.g.d[i], 1e-7f) / ci.base[1]);
-        const float db = std::log2(std::max(cv.b.d[i], 1e-7f) / ci.base[2]);
-        return std::max({dr, dg, db}) - std::min({dr, dg, db});
-      };
-      std::vector<uint8_t> promote(N, 0);
-      auto promote_lines = [&](bool rows) {
-        const int n = rows ? H : W, m = rows ? W : H;
-        std::vector<uint8_t> cand(n, 0);
-        std::vector<double> sp(n, 1.0);
-        for (int a = 0; a < n; ++a) {
-          int nf = 0, nb0 = 0, nb2 = 0;
-          double sp_sum = 0.0;
-          for (int b = 0; b < m; ++b) {
-            const size_t i = rows ? (size_t)a * W + b : (size_t)b * W + a;
-            if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
-              nf++;
-              if (ci.cls[i] == CL_BASE) nb0++;
-              if (near_base(i)) {
-                nb2++;
-                sp_sum += chroma_spread(i);
-              }
-            }
-          }
-          if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
-            cand[a] = 1;
-            sp[a] = sp_sum / nb2;
-          }
-        }
-        for (int a = 0; a < n;) {
-          if (!cand[a]) { ++a; continue; }
-          int a1 = a;
-          double sp_run = 0.0;
-          while (a1 < n && cand[a1]) { sp_run += sp[a1]; ++a1; }
-          if (ci.light_clipped || a <= 4 || a1 >= n - 4 || sp_run <= 0.08 * (a1 - a)) {
-            for (int aa = a; aa < a1; ++aa)
-              for (int b = 0; b < m; ++b) {
-                const size_t i = rows ? (size_t)aa * W + b : (size_t)b * W + aa;
-                if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
-              }
-          }
-          a = a1;
-        }
-      };
-      promote_lines(true);
-      promote_lines(false);
-      for (size_t i = 0; i < N; ++i)
-        if (promote[i]) ci.cls[i] = CL_BASE;
+}
+
+// Holder-framed negatives with no visible rebate (see classify_base_reclass): the base parts that reach the central
+// box (cx0..cx1 x cy0..cy1) or are not lines become IMAGE.
+void classify_bright_picture(ClassifyState& s, int cx0, int cx1, int cy0, int cy1) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  const Plane& lum = s.lum;
+  ClassInfo& ci = s.ci;
+  std::vector<uint8_t> bm(N, 0);
+  for (size_t i = 0; i < N; ++i) bm[i] = ci.cls[i] == CL_BASE ? 1 : 0;
+  Labels L;
+  components(bm, cv.valid, lum, W, H, L);
+  const size_t nk = L.area.size();
+  std::vector<uint8_t> central(nk, 0);
+  std::vector<int> bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      const int k = L.lab[(size_t)y * W + x];
+      if (k < 0) continue;
+      if (y >= cy0 && y < cy1 && x >= cx0 && x < cx1) central[k] = 1;
+      bx0[k] = std::min(bx0[k], x);
+      bx1[k] = std::max(bx1[k], x);
+      by0[k] = std::min(by0[k], y);
+      by1[k] = std::max(by1[k], y);
     }
   }
+  for (size_t i = 0; i < N; ++i) {
+    const int k = L.lab[i];
+    if (k < 0) continue;
+    // A band: long and thin, as a rebate beside the frame or a gap between frames is. Its mean thickness (area
+    // over its length) is at least about a millimetre (1% of the canvas's short side, the width of a 35mm gap on
+    // a frame filling the image), so a printed or drawn line a pixel or two thick is picture, and its length is at
+    // least 6 times that thickness, so a bright picture region that merely reaches half the canvas (a white patch
+    // of a test chart, 4 times as long as thick) is picture too; taking such patches for base cuts the crop short.
+    const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
+    const double thick = (double)L.area[k] / span;
+    const bool band = thick >= std::max(2.0, 0.01 * std::min(W, H)) && span >= 6.0 * thick;
+    const bool line = (2 * (bx1[k] - bx0[k] + 1) >= W || 2 * (by1[k] - by0[k] + 1) >= H) && band;
+    if (central[k] || !line) ci.cls[i] = CL_IMAGE;
+  }
+}
+
+// Vignetted light sources (the comment inside): lines of IMAGE near the base become BASE.
+void classify_vignetted_base(ClassifyState& s) {
+  const Canvas& cv = s.cv;
+  const int W = s.W, H = s.H;
+  const size_t N = s.N;
+  ClassInfo& ci = s.ci;
+  // Vignetted light sources: an inter-frame gap or border rebate line whose ends reach ci.base (>= 15% CL_BASE)
+  // can dip up to 0.60 stop below ci.base across its middle while keeping film-base chromaticity (mean spread
+  // <= 0.35 stop, or <= 0.08 stop on unclipped interiors so low-density picture highlights are not promoted).
+  const float k2 = std::exp2(-0.60f);
+  auto near_base = [&](size_t i) {
+    return cv.r.d[i] >= ci.base[0] * k2 && cv.g.d[i] >= ci.base[1] * k2 && cv.b.d[i] >= ci.base[2] * k2;
+  };
+  auto chroma_spread = [&](size_t i) {
+    const float dr = std::log2(std::max(cv.r.d[i], 1e-7f) / ci.base[0]);
+    const float dg = std::log2(std::max(cv.g.d[i], 1e-7f) / ci.base[1]);
+    const float db = std::log2(std::max(cv.b.d[i], 1e-7f) / ci.base[2]);
+    return std::max({dr, dg, db}) - std::min({dr, dg, db});
+  };
+  std::vector<uint8_t> promote(N, 0);
+  auto promote_lines = [&](bool rows) {
+    const int n = rows ? H : W, m = rows ? W : H;
+    std::vector<uint8_t> cand(n, 0);
+    std::vector<double> sp(n, 1.0);
+    for (int a = 0; a < n; ++a) {
+      int nf = 0, nb0 = 0, nb2 = 0;
+      double sp_sum = 0.0;
+      for (int b = 0; b < m; ++b) {
+        const size_t i = rows ? (size_t)a * W + b : (size_t)b * W + a;
+        if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
+          nf++;
+          if (ci.cls[i] == CL_BASE) nb0++;
+          if (near_base(i)) {
+            nb2++;
+            sp_sum += chroma_spread(i);
+          }
+        }
+      }
+      if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
+        cand[a] = 1;
+        sp[a] = sp_sum / nb2;
+      }
+    }
+    for (int a = 0; a < n;) {
+      if (!cand[a]) { ++a; continue; }
+      int a1 = a;
+      double sp_run = 0.0;
+      while (a1 < n && cand[a1]) { sp_run += sp[a1]; ++a1; }
+      if (ci.light_clipped || a <= 4 || a1 >= n - 4 || sp_run <= 0.08 * (a1 - a)) {
+        for (int aa = a; aa < a1; ++aa)
+          for (int b = 0; b < m; ++b) {
+            const size_t i = rows ? (size_t)aa * W + b : (size_t)b * W + aa;
+            if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
+          }
+      }
+      a = a1;
+    }
+  };
+  promote_lines(true);
+  promote_lines(false);
+  for (size_t i = 0; i < N; ++i)
+    if (promote[i]) ci.cls[i] = CL_BASE;
+}
+
+// On a negative with a base, after the classes: a bright picture region taken for base (classify_bright_picture), or
+// else, with light or dark seen, film base dimmed by vignetting (classify_vignetted_base).
+void classify_base_reclass(ClassifyState& s) {
+  const int W = s.W, H = s.H;
+  const size_t nlight = s.nlight;
+  const ClassInfo& ci = s.ci;
+  // Holder-framed negatives with no visible rebate: the brightest mode of the film is a bright picture region
+  // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture: the
+  // base parts that reach the central box or are not lines. A part outside it that spans half the canvas along x or
+  // y (a rebate band beside the frame, a gap between frames) stays base, so a strip with a large base fraction keeps
+  // the gaps and rebate that bound its frames.
+  size_t nb = 0, ni = 0, ndark = 0, nb_c = 0, n_c = 0;
+  const int cx0 = W / 4, cx1 = W - W / 4, cy0 = H / 4, cy1 = H - H / 4;
+  for (int y = 0; y < H; ++y) {
+    const bool in_y = (y >= cy0 && y < cy1);
+    for (int x = 0; x < W; ++x) {
+      const uint8_t c = ci.cls[(size_t)y * W + x];
+      if (c == CL_BASE) nb++;
+      else if (c == CL_IMAGE) ni++;
+      else if (c == CL_DARK) ndark++;
+      if (in_y && x >= cx0 && x < cx1 && (c == CL_BASE || c == CL_IMAGE)) {
+        n_c++;
+        if (c == CL_BASE) nb_c++;
+      }
+    }
+  }
+  if (nb + ni > 0 && nb > 0.30 * (nb + ni) && n_c > 0 && nb_c > 0.30 * n_c) {
+    classify_bright_picture(s, cx0, cx1, cy0, cy1);
+  } else if (nlight > 0 || ndark > 0) {
+    classify_vignetted_base(s);
+  }
+}
+
+// Classifies every canvas pixel (see the file comment, step 4). Levels: ref is the 99.9th percentile luminance and
+// refc the per channel 99.9th percentiles (bare light when some is visible, else the thinnest film); m(i), the
+// minimum over channels of value / refc, is how close a pixel is to that reference in every channel (log2).
+// Allocates (transiently, canvas sized): ~6 float planes and ~17 byte masks, and component label planes, of which at
+// most 6 float or label planes and ~6 byte masks are live at once; the holder test adds one float plane only when a
+// large dark part at the border fails its per-pixel flatness test.
+// The steps are below in this order; each says what it sets in the shared state (ClassifyState).
+void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
+  ClassifyState s(cv, pol, ci);
+  classify_levels(s);
+  classify_clipped_light(s);
+  classify_levels_and_flatness(s);
+  classify_bare_light(s);
+  if (ci.light_clipped) classify_clipped_film(s);
+  // The blended edge of light counts as light.
+  dilate(s.light, s.W, s.H, 2);
+  for (size_t i = 0; i < s.N; ++i)
+    if (s.black[i] || !cv.valid[i]) s.light[i] = 0;
+  classify_film_base(s);
+  if (pol == FILM_NEGATIVE && ci.base_valid) classify_unclipped_holes(s);
+  if (pol == FILM_POSITIVE) classify_slide_dark(s);
+  classify_holder(s);
+  classify_assign(s);
+  if (pol == FILM_NEGATIVE && ci.base_valid) classify_base_reclass(s);
 }
 
 // ---- 5a. Rectangle search -------------------------------------------------------------------------------------
@@ -1839,20 +2025,46 @@ struct FormatResult {
 // A reading bounded its frame at both ends (rather than laying the format's length around a picture run).
 inline bool bounded(const FormatResult& r) { return r.det.reason.find("frame_ends_unbounded") == std::string::npos; }
 
-// Steps 5a-c for one format. Allocates: the search map (sw x sh floats, gated copy, three double prefix planes)
-// and view-length profiles.
+// A canvas class on the film: picture or base, and on a positive also its dense (dark) parts.
+struct FilmClass {
+  bool positive;
+  bool operator()(uint8_t c) const { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); }
+};
 
-bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& cv, const ClassInfo& ci,
-                       const FrameDetectionParams& P, FilmFormat fmt, FormatResult& res) {
-  const FormatGeom fg = format_geom(fmt);
-  const int W = cv.w, H = cv.h;
-  const bool positive = P.polarity == FILM_POSITIVE;
-  // A canvas class on the film: picture or base, and on a positive also its dense (dark) parts.
-  auto film = [positive](uint8_t c) { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); };
+// What detect_one_format's steps share for one format: the inputs, the format's geometry, the search map's reduction
+// factor and size and the best rectangle for each orientation (5a), and the border vote on the strip's axis.
+struct FormatCtx {
+  FormatCtx(const FilmImage& im_, const WorkImage& wi_, const Canvas& cv_, const ClassInfo& ci_,
+            const FrameDetectionParams& P_, FilmFormat fmt_)
+      : im(im_), wi(wi_), cv(cv_), ci(ci_), P(P_), fmt(fmt_), fg(format_geom(fmt_)), W(cv_.w), H(cv_.h),
+        positive(P_.polarity == FILM_POSITIVE), film{positive} {}
+  const FilmImage& im;
+  const WorkImage& wi;
+  const Canvas& cv;
+  const ClassInfo& ci;
+  const FrameDetectionParams& P;
+  FilmFormat fmt;
+  FormatGeom fg;
+  int W, H;
+  bool positive;
+  FilmClass film;
+  int f = 1, sw = 0, sh = 0;  // format_search_map
+  float aspect = 0.0f;        // the frame's w / h with the strip along x
+  bool square = false;
+  SearchRes rh, rv;           // the best rectangles with the strip along x and along y (rv not on a square format)
+  int axis_ev = 0;            // strip_axis_evidence
+};
 
-  // ---- 5a. The non-image map at <= 320 px (box fraction of non-image canvas pixels), gated, as prefix sums.
+// 5a. The non-image map at <= 320 px (box fraction of non-image canvas pixels), gated, as prefix sums; sets f, sw and
+// sh.
+void format_search_map(FormatCtx& fc, SearchMap& S) {
+  const ClassInfo& ci = fc.ci;
+  const int W = fc.W, H = fc.H;
   const int f = std::max(1, (int)std::ceil(std::max(W, H) / 320.0));
-  const int sw = W / f, sh = H / f;
+  fc.f = f;
+  fc.sw = W / f;
+  fc.sh = H / f;
+  const int sw = fc.sw, sh = fc.sh;
   std::vector<float> nim((size_t)sw * sh, 0.0f);
   for (int y = 0; y < sh; ++y) {
     for (int x = 0; x < sw; ++x) {
@@ -1864,78 +2076,125 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   }
   std::vector<float> gated;
   line_gate(nim, sw, sh, 0.3f, 0.85f, gated);
-  SearchMap S;
   build_search(gated, sw, sh, S);
+}
 
-  const float aspect = fg.along / fg.across;  // the frame's w / h with the strip along x
-  const bool square = std::fabs(fg.along - fg.across) < 1e-3f;
-  SearchRes rh = best_rect(S, aspect), rv;
-  if (!square) rv = best_rect(S, 1.0f / aspect);
-
-  // Strip direction from the image itself: a strip along x runs off the left and/or right border, the top and
-  // bottom borders see no film, and some rows (beyond the strip) hold no film at all.
+// Strip direction from the image itself: a strip along x runs off the left and/or right border, the top and
+// bottom borders see no film, and some rows (beyond the strip) hold no film at all. 1 along x, -1 along y, 0 when
+// the image does not say.
+int strip_axis_evidence(const FormatCtx& fc) {
+  const ClassInfo& ci = fc.ci;
+  const int W = fc.W, H = fc.H;
+  const FilmClass& film = fc.film;
   int axis_ev = 0;  // 1 along x, -1 along y
-  {
-    auto no_film_lines = [&](bool rows) {
-      const int n = rows ? H : W, m = rows ? W : H;
-      int cnt = 0, tot = 0;
+  auto no_film_lines = [&](bool rows) {
+    const int n = rows ? H : W, m = rows ? W : H;
+    int cnt = 0, tot = 0;
+    for (int a = 0; a < n; ++a) {
+      int nf = 0, fi = 0;
+      for (int b = 0; b < m; ++b) {
+        const uint8_t c = rows ? ci.cls[(size_t)a * W + b] : ci.cls[(size_t)b * W + a];
+        if (c == CL_INVALID) continue;
+        (film(c) ? fi : nf)++;
+      }
+      if (fi + nf < 0.5f * m) continue;
+      tot++;
+      if (nf >= 0.9f * (fi + nf)) cnt++;
+    }
+    return tot ? (float)cnt / tot : 0.0f;
+  };
+  // Sides (0..2) whose first valid pixels inward from the border are film for >= 20% of the border.
+  auto film_sides = [&](bool left_right) {
+    int sides = 0;
+    for (int side = 0; side < 2; ++side) {
+      const int n = left_right ? H : W, m = left_right ? W : H;
+      int fi = 0, tot = 0;
       for (int a = 0; a < n; ++a) {
-        int nf = 0, fi = 0;
-        for (int b = 0; b < m; ++b) {
-          const uint8_t c = rows ? ci.cls[(size_t)a * W + b] : ci.cls[(size_t)b * W + a];
+        for (int k = 0; k < m; ++k) {
+          const int b = side ? m - 1 - k : k;
+          const uint8_t c = left_right ? ci.cls[(size_t)a * W + b] : ci.cls[(size_t)b * W + a];
           if (c == CL_INVALID) continue;
-          (film(c) ? fi : nf)++;
+          tot++;
+          fi += film(c) ? 1 : 0;
+          break;
         }
-        if (fi + nf < 0.5f * m) continue;
-        tot++;
-        if (nf >= 0.9f * (fi + nf)) cnt++;
       }
-      return tot ? (float)cnt / tot : 0.0f;
-    };
-    // Sides (0..2) whose first valid pixels inward from the border are film for >= 20% of the border.
-    auto film_sides = [&](bool left_right) {
-      int sides = 0;
-      for (int side = 0; side < 2; ++side) {
-        const int n = left_right ? H : W, m = left_right ? W : H;
-        int fi = 0, tot = 0;
-        for (int a = 0; a < n; ++a) {
-          for (int k = 0; k < m; ++k) {
-            const int b = side ? m - 1 - k : k;
-            const uint8_t c = left_right ? ci.cls[(size_t)a * W + b] : ci.cls[(size_t)b * W + a];
-            if (c == CL_INVALID) continue;
-            tot++;
-            fi += film(c) ? 1 : 0;
-            break;
-          }
-        }
-        if (tot && fi >= 0.2f * tot) sides++;
-      }
-      return sides;
-    };
-    const int t_lr = film_sides(true), t_tb = film_sides(false);
-    if (t_lr >= 1 && t_tb == 0 && no_film_lines(true) > 0.05f) axis_ev = 1;
-    else if (t_tb >= 1 && t_lr == 0 && no_film_lines(false) > 0.05f) axis_ev = -1;
-  }
-  bool tr0;
-  if (P.axis_hint == 'h' || P.axis_hint == 'H') tr0 = false;
-  else if (P.axis_hint == 'v' || P.axis_hint == 'V') tr0 = true;
-  else if (axis_ev != 0) tr0 = axis_ev < 0;
-  else tr0 = !square && rv.score > rh.score;
-  if (tr0 && !square && rv.h <= 0) tr0 = false;
-  if (!tr0 && !square && rh.h <= 0) tr0 = true;
+      if (tot && fi >= 0.2f * tot) sides++;
+    }
+    return sides;
+  };
+  const int t_lr = film_sides(true), t_tb = film_sides(false);
+  if (t_lr >= 1 && t_tb == 0 && no_film_lines(true) > 0.05f) axis_ev = 1;
+  else if (t_tb >= 1 && t_lr == 0 && no_film_lines(false) > 0.05f) axis_ev = -1;
+  return axis_ev;
+}
 
-  // ---- 5b. The strip model, in the view (strip along view x).
-  auto eval_strip = [&](bool tr, FormatResult& res_out) -> bool {
-  // The frame's w / h on the canvas swaps with the strip direction; a square frame is the same either way.
-  const SearchRes& r_init = (tr && !square) ? rv : rh;
-  if (r_init.h <= 0) return false;
-  res_out.score = r_init.score / ((double)sw * sh);
+// One reading of the strip model (5b) along one strip axis: what its steps share. The steps run in the order
+// read_strip calls them; each says what it sets.
+struct Seg { int a, b; };
+struct Cand { Rect r; int lt, rt; float vis; bool complete; };
+struct StripRead {
+  StripRead(const FormatCtx& fc, bool t) : tr(t), v{&fc.ci.cls, fc.W, fc.H, t}, VW(v.w()), VH(v.h()) {}
+  const bool tr;
   std::vector<std::string> reasons;
-  FrameDetection& out = res_out.det;
-  out = FrameDetection();
-  const View v{&ci.cls, W, H, tr};
-  const int VW = v.w(), VH = v.h();
-  Rect fr;  // the frame estimate, view coordinates
+  const View v;
+  const int VW, VH;
+  Rect fr;  // the frame estimate, view coordinates (strip_band)
+  // read_strip, from the band
+  float st_tb = 0.0f, across_px = 0.0f;
+  float ppm = 0.0f;    // canvas pixels per mm (strip_extent averages it with the strip's width)
+  float L_exp = 0.0f;  // nominal frame length, canvas pixels
+  std::vector<float> cp, cnon, cvalid;  // strip_column_profiles (strip_gap_lines clears gap columns)
+  std::vector<uint8_t> gap_line;        // strip_gap_lines
+  std::vector<float> cps;               // read_strip: cp smoothed
+  std::vector<Seg> segs;                // strip_segments, merge_segments
+  bool format_mismatch = false;         // strip_format_mismatch
+  // frame_candidates: a frame kept at its measured length against the format's (format_length_mismatch)
+  bool length_mismatch = false;
+  std::vector<Cand> cands;              // frame_candidates
+  int pi = 0;                           // pick_primary
+  Rect pr;
+  std::vector<std::pair<int, Rect>> sec;  // walk_neighbours
+  // strip_extent
+  int s0 = 0, s1 = 0, e0 = 0, e1 = 0;
+  bool edge0 = false, edge1 = false, end0 = false, end1 = false;
+  std::vector<Rect> holes;              // find_sprockets
+};
+
+// The band's transverse edges moved to the row profile's edges, not outward past a full row of holder or light;
+// returns the weaker edge's strength. Allocates: view-height and view-length profiles.
+float refine_band_edges(const StripRead& rd, Rect& r) {
+  const View& v = rd.v;
+  const int VH = rd.VH;
+  const int xa = (int)(r.x0 + 0.15f * r.w()), xb = (int)(r.x1 - 0.15f * r.w());
+  std::vector<float> rp(VH);
+  for (int y = 0; y < VH; ++y) rp[y] = row_frac(v, y, xa, xb, is_image);
+  const int delta = std::max(3, (int)(0.04f * r.h())), delta_ext = std::max(delta, (int)(0.10f * r.h())),
+            k = std::max(2, (int)(0.02f * r.h()));
+  float st0, st1;
+  const int c0 = (int)r.y0, c1 = (int)r.y1;
+  r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0, delta_ext);
+  r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
+  // A full row (90%) of holder or bare light ends the film: the edge does not move outward past one. Stray light on a
+  // holder above the film reads as picture, and the image border beyond it counts as non-image, so the image border
+  // made the cleaner edge and the frame ran over the holder to the top of the image (2c90f60949, 830e867e01,
+  // dd951ab7da, white-light 6x7 scans whose film runs under the holder at the sensor's top edge).
+  for (int y = std::min(c0, VH) - 1; y >= std::max(0, (int)r.y0); --y)
+    if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y0 = (float)(y + 1); break; }
+  for (int y = std::max(c1, 0); y < std::min(VH, (int)r.y1); ++y)
+    if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y1 = (float)y; break; }
+  return std::min(st0, st1);
+}
+
+// The frame band from the rectangle search's r_init, grown to the run of picture rows through its centre, and on
+// 35mm with the perforation rows cut off; sets fr.
+void strip_band(const FormatCtx& fc, StripRead& rd, const SearchRes& r_init) {
+  const FormatGeom& fg = fc.fg;
+  const int f = fc.f;
+  const bool tr = rd.tr;
+  const View& v = rd.v;
+  const int VH = rd.VH;
+  Rect& fr = rd.fr;
   {
     const float x0 = (float)(r_init.x * f), y0 = (float)(r_init.y * f), x1 = (float)((r_init.x + r_init.w) * f),
                 y1 = (float)((r_init.y + r_init.h) * f);
@@ -1951,27 +2210,6 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       fr.y1 = y1;
     }
   }
-  // Allocates: view-height and view-length profiles.
-  auto refine_tb = [&](Rect& r) {
-    const int xa = (int)(r.x0 + 0.15f * r.w()), xb = (int)(r.x1 - 0.15f * r.w());
-    std::vector<float> rp(VH);
-    for (int y = 0; y < VH; ++y) rp[y] = row_frac(v, y, xa, xb, is_image);
-    const int delta = std::max(3, (int)(0.04f * r.h())), delta_ext = std::max(delta, (int)(0.10f * r.h())),
-              k = std::max(2, (int)(0.02f * r.h()));
-    float st0, st1;
-    const int c0 = (int)r.y0, c1 = (int)r.y1;
-    r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0, delta_ext);
-    r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
-    // A full row (90%) of holder or bare light ends the film: the edge does not move outward past one. Stray light on a
-    // holder above the film reads as picture, and the image border beyond it counts as non-image, so the image border
-    // made the cleaner edge and the frame ran over the holder to the top of the image (2c90f60949, 830e867e01,
-    // dd951ab7da, white-light 6x7 scans whose film runs under the holder at the sensor's top edge).
-    for (int y = std::min(c0, VH) - 1; y >= std::max(0, (int)r.y0); --y)
-      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y0 = (float)(y + 1); break; }
-    for (int y = std::max(c1, 0); y < std::min(VH, (int)r.y1); ++y)
-      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y1 = (float)y; break; }
-    return std::min(st0, st1);
-  };
   // A partial frame cannot hold the full aspect, so the search rectangle can be shorter across the strip than the
   // frame: grow the band to the run of picture rows through its centre first.
   {
@@ -2015,20 +2253,41 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       }
     }
   }
-  const float st_tb = refine_tb(fr);
-  const float across_px = fr.h();
-  float ppm = across_px / fg.across;     // canvas pixels per mm
-  const float L_exp = across_px * aspect;  // nominal frame length, canvas pixels
+}
 
-  // Picture fraction per view column over the band's middle 76% (cp, smoothed cps), and the fraction of gap-like
-  // pixels (base, light, dark) over the whole band (cnon).
+// Picture fraction per view column over the band's middle 76% (cp), and the fraction of gap-like pixels (base,
+// light, dark) and of valid pixels over the whole band (cnon, cvalid).
+void strip_column_profiles(StripRead& rd) {
+  const View& v = rd.v;
+  const int VW = rd.VW;
+  const Rect& fr = rd.fr;
   const int ya = (int)(fr.y0 + 0.12f * fr.h()), yb = (int)(fr.y1 - 0.12f * fr.h());
-  std::vector<float> cp(VW), cnon(VW), cvalid(VW);
+  std::vector<float>& cp = rd.cp;
+  std::vector<float>& cnon = rd.cnon;
+  std::vector<float>& cvalid = rd.cvalid;
+  cp.assign(VW, 0.0f);
+  cnon.assign(VW, 0.0f);
+  cvalid.assign(VW, 0.0f);
   for (int x = 0; x < VW; ++x) {
     cp[x] = col_frac(v, x, ya, yb, is_image);
     cnon[x] = col_frac(v, x, (int)fr.y0, (int)fr.y1, is_gap);
     cvalid[x] = col_frac(v, x, (int)fr.y0, (int)fr.y1, is_valid);
   }
+}
+
+// Gap lines (the comment inside); sets gap_line and clears its columns in cp and cnon.
+void strip_gap_lines(const FormatCtx& fc, StripRead& rd) {
+  const ClassInfo& ci = fc.ci;
+  const FormatGeom& fg = fc.fg;
+  const int W = fc.W;
+  const bool positive = fc.positive;
+  const bool tr = rd.tr;
+  const View& v = rd.v;
+  const int VW = rd.VW, VH = rd.VH;
+  const Rect& fr = rd.fr;
+  const float ppm = rd.ppm;
+  std::vector<float>& cp = rd.cp;
+  std::vector<float>& cnon = rd.cnon;
   // Gap lines (gap_line, 1 inside a gap), found from geometry rather than from pixel classes, which cannot always
   // tell a gap from picture: a thin part of the picture at the base level joins a gap into one base region (which may
   // then be reclassed picture with it), and a scan that clipped the base clips its thinnest picture too. But a gap is
@@ -2048,7 +2307,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   //     holder or light): a band of base between the film's end and the holder is no gap between frames.
   // A line in a picture is not flat along the whole band, a blank region at the base level inside a picture has no
   // picture beside it, and a thin straight line in a picture is narrower than any gap.
-  std::vector<uint8_t> gap_line(VW, 0);
+  std::vector<uint8_t>& gap_line = rd.gap_line;
+  gap_line.assign(VW, 0);
   if (!positive && ci.base_valid) {
     const float base_ll = std::log2(std::max(1e-6f, (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f));
     auto ll_at = [&](int x, int y) { return tr ? ci.logl[(size_t)x * W + y] : ci.logl[(size_t)y * W + x]; };
@@ -2109,21 +2369,28 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       }
     }
   }
-  std::vector<float> cps = cp;
-  smooth1d(cps, std::max(0.6f, 0.15f * ppm));
-  // A frame's ends moved to the picture profile's edges (every frame candidate shares the band, so cp serves all).
-  auto refine_lr = [&](Rect& r, float* sl, float* sr) {
-    const int delta = std::max(3, (int)(0.04f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
-    r.x0 = refine_edge_profile(cp, r.x0, delta, k, true, sl);
-    r.x1 = refine_edge_profile(cp, r.x1, delta, k, false, sr);
-  };
+}
 
+// A frame's ends moved to the picture profile's edges (every frame candidate shares the band, so cp serves all).
+void refine_frame_ends(const StripRead& rd, Rect& r, float* sl, float* sr) {
+  const std::vector<float>& cp = rd.cp;
+  const int delta = std::max(3, (int)(0.04f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
+  r.x0 = refine_edge_profile(cp, r.x0, delta, k, true, sl);
+  r.x1 = refine_edge_profile(cp, r.x1, delta, k, false, sr);
+}
+
+// Segments (the comment inside); sets segs.
+void strip_segments(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const int VW = rd.VW;
+  const float ppm = rd.ppm, L_exp = rd.L_exp;
+  const std::vector<float>& cp = rd.cp;
+  const std::vector<float>& cps = rd.cps;
   // Segments: runs of picture columns; a run ends at half the format's narrowest gap (0.75 mm on 120, 0.4 mm on 35mm)
   // of columns under 30% picture. A thinner dip is a line in the picture (a 0.3 mm white line must not split a frame
   // and become its end). A run starts at 50% picture (smoothed) and ends under 30% (raw or smoothed): the hysteresis
   // keeps a frame's soft edge from splitting it. Runs shorter than 12% of the frame length are picture specks.
-  struct Seg { int a, b; };
-  std::vector<Seg> segs;
+  std::vector<Seg>& segs = rd.segs;
   {
     const int gap_min_px = std::max(1, (int)std::lround(0.5f * fg.gap_min * ppm));
     int x = 0;
@@ -2147,6 +2414,18 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       if (b - a >= std::max(3, (int)(0.12f * L_exp))) segs.push_back({a, b});
     }
   }
+}
+
+// A real gap between frames is a gap line, or non-image and mostly light or holder rather than base; anything else
+// between two segments is merged back (the comment inside). With no segment, the band's frame is one.
+void merge_segments(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const View& v = rd.v;
+  const int VW = rd.VW, VH = rd.VH;
+  const Rect& fr = rd.fr;
+  const float L_exp = rd.L_exp;
+  const std::vector<uint8_t>& gap_line = rd.gap_line;
+  std::vector<Seg>& segs = rd.segs;
   // A real gap between frames is a gap line (above), or non-image and mostly light or holder rather than base;
   // anything else (a thin band in a picture) is merged back when the merged run still fits one frame.
   {
@@ -2185,63 +2464,87 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     }
   }
   if (segs.empty()) segs.push_back({(int)fr.x0, (int)fr.x1});
+}
 
-  // What bounds a frame end going outward from edge_x: 0 open (the image border, or picture right away), 1 a film
-  // gap (base, then film), 2 a hard limit (holder or light: the end of the visible film).
-  auto bound_type = [&](int edge_x, int dir) {
-    const int maxd = std::max(2, (int)std::lround(fg.gap_max * ppm));
-    int run = 0, hard = 0, base = 0;
-    for (int d = 0; d < maxd; ++d) {
-      const int x = edge_x + dir * d;
-      if (x < 0 || x >= VW || cvalid[x] < 0.9f) break;
-      if (cnon[x] >= 0.85f) {
-        ++run;
-        if (col_frac(v, x, (int)fr.y0, (int)fr.y1, is_hard) >= 0.6f) hard++;
-        else base++;
-        if (run >= 3 && hard >= 2 && hard > base) return 2;
-      } else if (run == 0 && d < 3 && cp[x] < 0.7f) {
-        continue;
-      } else if (cps[x] >= 0.5f) {
-        if (run >= 2) return 1;
-        if (run == 1 && hard == 1 && d <= 3 && d + 6 < maxd) {
-          int hrun = 0;
-          for (int k = d + 1; k < maxd && hrun < 6; ++k) {
-            const int xk = edge_x + dir * k;
-            if (xk < 0 || xk >= VW || cvalid[xk] < 0.9f) break;
-            if (cnon[xk] >= 0.85f && col_frac(v, xk, (int)fr.y0, (int)fr.y1, is_hard) >= 0.9f) ++hrun;
-            else if (hrun > 0 || k > 3 || cps[xk] >= 0.5f) break;
-          }
-          if (hrun == 6) return 2;
+// What bounds a frame end going outward from edge_x: 0 open (the image border, or picture right away), 1 a film
+// gap (base, then film), 2 a hard limit (holder or light: the end of the visible film).
+int frame_end_bound(const FormatCtx& fc, const StripRead& rd, int edge_x, int dir) {
+  const FormatGeom& fg = fc.fg;
+  const View& v = rd.v;
+  const int VW = rd.VW;
+  const Rect& fr = rd.fr;
+  const float ppm = rd.ppm;
+  const std::vector<float>& cp = rd.cp;
+  const std::vector<float>& cnon = rd.cnon;
+  const std::vector<float>& cvalid = rd.cvalid;
+  const std::vector<float>& cps = rd.cps;
+  const int maxd = std::max(2, (int)std::lround(fg.gap_max * ppm));
+  int run = 0, hard = 0, base = 0;
+  for (int d = 0; d < maxd; ++d) {
+    const int x = edge_x + dir * d;
+    if (x < 0 || x >= VW || cvalid[x] < 0.9f) break;
+    if (cnon[x] >= 0.85f) {
+      ++run;
+      if (col_frac(v, x, (int)fr.y0, (int)fr.y1, is_hard) >= 0.6f) hard++;
+      else base++;
+      if (run >= 3 && hard >= 2 && hard > base) return 2;
+    } else if (run == 0 && d < 3 && cp[x] < 0.7f) {
+      continue;
+    } else if (cps[x] >= 0.5f) {
+      if (run >= 2) return 1;
+      if (run == 1 && hard == 1 && d <= 3 && d + 6 < maxd) {
+        int hrun = 0;
+        for (int k = d + 1; k < maxd && hrun < 6; ++k) {
+          const int xk = edge_x + dir * k;
+          if (xk < 0 || xk >= VW || cvalid[xk] < 0.9f) break;
+          if (cnon[xk] >= 0.85f && col_frac(v, xk, (int)fr.y0, (int)fr.y1, is_hard) >= 0.9f) ++hrun;
+          else if (hrun > 0 || k > 3 || cps[xk] >= 0.5f) break;
         }
-        return 0;
+        if (hrun == 6) return 2;
       }
+      return 0;
     }
-    if (run >= 2) return hard > base ? 2 : 1;
-    return 0;
-  };
-  // The strip's transverse edges around the band [y0, y1) over the columns [x0, x1): outward while rows are film, at
-  // most lim rows each way; edge0/edge1 when a non-film row ends the strip (not the image or invalid canvas).
-  auto strip_edges = [&](int x0, int x1, float y0, float y1, int lim, int& s0, int& s1, bool& edge0, bool& edge1) {
-    s0 = (int)y0;
-    s1 = (int)y1;
-    edge0 = edge1 = false;
-    for (int y = (int)y0 - 1; y >= std::max(0, (int)y0 - lim); --y) {
-      if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
-      if (row_frac(v, y, x0, x1, film) < 0.25f) {
-        edge0 = true;
-        break;
-      }
-      s0 = y;
+  }
+  if (run >= 2) return hard > base ? 2 : 1;
+  return 0;
+}
+
+// The strip's transverse edges around the band [y0, y1) over the columns [x0, x1): outward while rows are film, at
+// most lim rows each way; edge0/edge1 when a non-film row ends the strip (not the image or invalid canvas).
+void find_strip_edges(const FormatCtx& fc, const StripRead& rd, int x0, int x1, float y0, float y1, int lim,
+                      int& s0, int& s1, bool& edge0, bool& edge1) {
+  const FilmClass& film = fc.film;
+  const View& v = rd.v;
+  const int VH = rd.VH;
+  s0 = (int)y0;
+  s1 = (int)y1;
+  edge0 = edge1 = false;
+  for (int y = (int)y0 - 1; y >= std::max(0, (int)y0 - lim); --y) {
+    if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
+    if (row_frac(v, y, x0, x1, film) < 0.25f) {
+      edge0 = true;
+      break;
     }
-    for (int y = (int)y1; y < std::min(VH, (int)y1 + lim); ++y) {
-      if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
-      if (row_frac(v, y, x0, x1, film) < 0.25f) {
-        edge1 = true;
-        break;
-      }
-      s1 = y + 1;
+    s0 = y;
+  }
+  for (int y = (int)y1; y < std::min(VH, (int)y1 + lim); ++y) {
+    if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
+    if (row_frac(v, y, x0, x1, film) < 0.25f) {
+      edge1 = true;
+      break;
     }
-  };
+    s1 = y + 1;
+  }
+}
+
+// Whether the strip says the format is wrong (the comment inside).
+bool strip_format_mismatch(const FormatCtx& fc, const StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const int VW = rd.VW;
+  const Rect& fr = rd.fr;
+  const float across_px = rd.across_px;
+  auto strip_edges = [&fc, &rd](int x0, int x1, float y0, float y1, int lim, int& s0, int& s1, bool& edge0,
+                                bool& edge1) { find_strip_edges(fc, rd, x0, x1, y0, y1, lim, s0, s1, edge0, edge1); };
   // Whether the strip says the format is wrong: both strip edges found within a wide search (up to 40% of the frame
   // height each way, enough for 35mm's rebate, whose share of the strip is the largest), and the strip-to-frame ratio
   // more than 8% from the format's and nearer the other film's (35mm 35 / 24 = 1.46, 120 61.5 / 56 = 1.10): a 120
@@ -2261,7 +2564,21 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
                         std::fabs(std::log(ratio / other)) < std::fabs(std::log(ratio / expected));
     }
   }
-  bool length_mismatch = false;  // a frame kept at its measured length against the format's (format_length_mismatch)
+  return format_mismatch;
+}
+
+// Each segment becomes a frame candidate (the comment inside); sets cands and length_mismatch.
+void frame_candidates(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const int VW = rd.VW;
+  const Rect& fr = rd.fr;
+  const float st_tb = rd.st_tb, across_px = rd.across_px, L_exp = rd.L_exp;
+  const bool format_mismatch = rd.format_mismatch;
+  const std::vector<float>& cvalid = rd.cvalid;
+  const std::vector<Seg>& segs = rd.segs;
+  bool& length_mismatch = rd.length_mismatch;
+  auto refine_lr = [&rd](Rect& r, float* sl, float* sr) { refine_frame_ends(rd, r, sl, sr); };
+  auto bound_type = [&fc, &rd](int edge_x, int dir) { return frame_end_bound(fc, rd, edge_x, dir); };
   // Each segment becomes a frame candidate. Its measured length stands when it is within len_tol of the format's
   // nominal length L_exp, and otherwise when
   //   - both ends are bounded with similar edge strengths and the length is within 2 len_tol (cameras space frames
@@ -2276,8 +2593,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // (a short frame there has a shadow band at the other end), or the first end when the segment is over 1.6 L_exp
   // (frames with no visible gap between them; the others are found as neighbours); with one end bounded, that end;
   // with neither, around the segment's centre.
-  struct Cand { Rect r; int lt, rt; float vis; bool complete; };
-  std::vector<Cand> cands;
+  std::vector<Cand>& cands = rd.cands;
   const float tol = fg.len_tol;
   for (const Seg& sg : segs) {
     Rect r = fr;
@@ -2334,9 +2650,15 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const bool complete = r.x0 >= 0 && r.x1 <= VW && vis >= 0.97f * (r.w() / L_exp);
     cands.push_back({r, lt, rt, vis, complete});
   }
-  // The primary: the complete frame nearest the image centre, else the most visible frame.
+}
+
+// The primary: the complete frame nearest the image centre, else the most visible frame; sets pi and pr.
+void pick_primary(const FormatCtx& fc, StripRead& rd) {
+  const Canvas& cv = fc.cv;
+  const bool tr = rd.tr;
+  const std::vector<Cand>& cands = rd.cands;
+  int& pi = rd.pi;
   const float centre = tr ? cv.cyc : cv.cxc;
-  int pi = 0;
   double pbest = -1e30;
   for (size_t i = 0; i < cands.size(); ++i) {
     const Cand& c = cands[i];
@@ -2346,11 +2668,22 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       pi = (int)i;
     }
   }
-  const Rect pr = cands[pi].r;
+  rd.pr = cands[pi].r;
+}
 
-  // The neighbours: from the primary outward at its length, the next frame starting where picture resumes after a
-  // gap (or the nominal gap when none is seen); stops at a blank frame, the strip end, the holder or the border.
-  std::vector<std::pair<int, Rect>> sec;
+// The neighbours: from the primary outward at its length, the next frame starting where picture resumes after a
+// gap (or the nominal gap when none is seen); stops at a blank frame, the strip end, the holder or the border; sets
+// sec.
+void walk_neighbours(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const int VW = rd.VW;
+  const float ppm = rd.ppm;
+  const Rect& pr = rd.pr;
+  const std::vector<float>& cp = rd.cp;
+  const std::vector<float>& cvalid = rd.cvalid;
+  const std::vector<float>& cps = rd.cps;
+  auto refine_lr = [&rd](Rect& r, float* sl, float* sr) { refine_frame_ends(rd, r, sl, sr); };
+  std::vector<std::pair<int, Rect>>& sec = rd.sec;
   {
     const float L = pr.w();
     for (int dir = -1; dir <= 1; dir += 2) {
@@ -2402,17 +2735,43 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       }
     }
   }
+}
 
-  // The strip's edges (s0, s1): from the frame band outward while rows over the frame are film; its ends (e0, e1):
-  // from the frame outward while columns over the strip are film.
+// The strip's edges (s0, s1): from the frame band outward while rows over the frame are film; its ends (e0, e1):
+// from the frame outward while columns over the strip are film. Sets fx0, fx1, s0, s1, edge0, edge1, e0, e1, end0,
+// end1, and ppm from the strip width when both edges are seen; adds reasons.
+void strip_extent(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const FilmClass& film = fc.film;
+  const View& v = rd.v;
+  const int VW = rd.VW, VH = rd.VH;
+  const Rect& fr = rd.fr;
+  const Rect& pr = rd.pr;
+  float& ppm = rd.ppm;
+  std::vector<std::string>& reasons = rd.reasons;
+  auto strip_edges = [&fc, &rd](int x0, int x1, float y0, float y1, int lim, int& s0, int& s1, bool& edge0,
+                                bool& edge1) { find_strip_edges(fc, rd, x0, x1, y0, y1, lim, s0, s1, edge0, edge1); };
+  const bool length_mismatch = rd.length_mismatch;
+  int& s0 = rd.s0;
+  int& s1 = rd.s1;
+  bool& edge0 = rd.edge0;
+  bool& edge1 = rd.edge1;
+  int& e0 = rd.e0;
+  int& e1 = rd.e1;
+  bool& end0 = rd.end0;
+  bool& end1 = rd.end1;
   const int fx0 = std::max(0, (int)pr.x0), fx1 = std::min(VW, (int)pr.x1);
-  int s0 = (int)pr.y0, s1 = (int)pr.y1;
-  bool edge0 = false, edge1 = false;
+  s0 = (int)pr.y0;
+  s1 = (int)pr.y1;
+  edge0 = false;
+  edge1 = false;
   strip_edges(fx0, fx1, pr.y0, pr.y1, (int)std::lround((fg.film_width - fg.across) * 0.5f * ppm * 1.6f) + 3, s0, s1,
               edge0, edge1);
   if (length_mismatch) reasons.push_back("format_length_mismatch");
-  int e0 = fx0, e1 = fx1;
-  bool end0 = false, end1 = false;
+  e0 = fx0;
+  e1 = fx1;
+  end0 = false;
+  end1 = false;
   {
     const int ra = std::max(0, s0), rb = std::min(VH, s1);
     for (int x = fx0 - 1; x >= 0; --x) {
@@ -2441,10 +2800,21 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   } else {
     reasons.push_back("strip_edges_partial");
   }
+}
 
+// 35mm perforations (the comment inside); sets holes and adds no_sprockets when none is found.
+void find_sprockets(const FormatCtx& fc, StripRead& rd) {
+  const FormatGeom& fg = fc.fg;
+  const View& v = rd.v;
+  const int VW = rd.VW, VH = rd.VH;
+  const float ppm = rd.ppm;
+  const Rect& pr = rd.pr;
+  const int s0 = rd.s0, s1 = rd.s1, e0 = rd.e0, e1 = rd.e1;
+  const bool edge0 = rd.edge0, edge1 = rd.edge1;
+  std::vector<Rect>& holes = rd.holes;
+  std::vector<std::string>& reasons = rd.reasons;
   // 35mm perforations: in each rebate band the longest run of rows where light covers 20..80% of the strip's
   // length, then light runs along it of a hole's width, accepted when their median pitch is 4.75 mm (+25% / -20%).
-  std::vector<Rect> holes;
   if (fg.sprockets) {
     const float hw = kHoleW * ppm, hh = kHoleH * ppm;
     auto light = [](uint8_t c) { return c == CL_LIGHT; };
@@ -2495,7 +2865,18 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     }
     if (holes.empty()) reasons.push_back("no_sprockets");
   }
+}
 
+// Film base patches next to the primary (the comment inside): res_out.base_patches.
+void base_patches(const FormatCtx& fc, const StripRead& rd, FormatResult& res_out) {
+  const Canvas& cv = fc.cv;
+  const WorkImage& wi = fc.wi;
+  const FormatGeom& fg = fc.fg;
+  const bool tr = rd.tr;
+  const View& v = rd.v;
+  const int VW = rd.VW, VH = rd.VH;
+  const float ppm = rd.ppm;
+  const Rect& pr = rd.pr;
   // Film base patches next to the primary: each adjacent inter-frame gap (the run of base columns beside it), over the
   // middle 60% of the band, and the rebate above and below the frame, each as long as its columns or rows stay >= 90%
   // base, shrunk by a quarter of their width on each side.
@@ -2554,7 +2935,35 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       res_out.base_patches.push_back(G.to_image(g));
     }
   }
+}
 
+// The reading in image coordinates (with 5c, the primary's sub-pixel edges): the primary and its neighbours, the
+// strip's extent, the holes, the film gaps at the primary's ends, the axis, the tilt, px per mm, the format and the
+// orientation; fills res_out.det apart from conf and reason.
+void strip_detection(const FormatCtx& fc, const StripRead& rd, FormatResult& res_out) {
+  const FilmImage& im = fc.im;
+  const WorkImage& wi = fc.wi;
+  const Canvas& cv = fc.cv;
+  const ClassInfo& ci = fc.ci;
+  const FrameDetectionParams& P = fc.P;
+  const FilmFormat fmt = fc.fmt;
+  const FormatGeom& fg = fc.fg;
+  const bool positive = fc.positive, square = fc.square;
+  const int axis_ev = fc.axis_ev;
+  const bool tr = rd.tr;
+  const int VW = rd.VW;
+  const float across_px = rd.across_px, ppm = rd.ppm, L_exp = rd.L_exp;
+  const std::vector<float>& cp = rd.cp;
+  const std::vector<float>& cnon = rd.cnon;
+  const std::vector<float>& cvalid = rd.cvalid;
+  const std::vector<Cand>& cands = rd.cands;
+  const int pi = rd.pi;
+  const Rect& pr = rd.pr;
+  const std::vector<std::pair<int, Rect>>& sec = rd.sec;
+  const int s0 = rd.s0, s1 = rd.s1, e0 = rd.e0, e1 = rd.e1;
+  const bool edge0 = rd.edge0, edge1 = rd.edge1;
+  const std::vector<Rect>& holes = rd.holes;
+  FrameDetection& out = res_out.det;
   // Strip direction: known for a non-square frame, or from neighbours, both strip edges, holes or the image.
   char axis = tr ? 'v' : 'h';
   if (square && sec.empty() && !(edge0 && edge1) && holes.empty() && axis_ev == 0 && !P.axis_hint) axis = '?';
@@ -2634,6 +3043,19 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   out.px_per_mm = ppm * 0.5f * (wi.sx + wi.sy);
   out.format = fmt;
   out.orientation = square ? "square" : (out.primary.rect.w > out.primary.rect.h ? "landscape" : "portrait");
+}
+
+// Confidence (the comment inside), and the reasons; sets res_out.det.conf and reason.
+void strip_confidence(StripRead& rd, FormatResult& res_out) {
+  const int VH = rd.VH;
+  const float st_tb = rd.st_tb;
+  const std::vector<Cand>& cands = rd.cands;
+  const int pi = rd.pi;
+  const int s0 = rd.s0, s1 = rd.s1;
+  const bool edge0 = rd.edge0, edge1 = rd.edge1, end0 = rd.end0, end1 = rd.end1;
+  const std::vector<Rect>& holes = rd.holes;
+  std::vector<std::string>& reasons = rd.reasons;
+  FrameDetection& out = res_out.det;
   // Confidence: 1, marked down per doubt; the smaller the factor, the more that doubt suggests a wrong frame. A
   // partial primary (x0.7) or one with an open end (x0.85) may be laid at the nominal length rather than measured;
   // weak transverse edges (strength < 0.4, x0.8) may be a band inside the picture; and nothing that bounds the film
@@ -2664,9 +3086,62 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   }
   out.conf = conf;
   out.reason = join(reasons);
+}
+
+// 5b. The strip model, in the view (strip along view x), along the strip axis tr: false when the rectangle search
+// found no frame for that orientation.
+bool read_strip(const FormatCtx& fc, bool tr, FormatResult& res_out) {
+  const FormatGeom& fg = fc.fg;
+  const bool square = fc.square;
+  const float aspect = fc.aspect;
+  const SearchRes& rv = fc.rv;
+  const SearchRes& rh = fc.rh;
+  const int sw = fc.sw, sh = fc.sh;
+  // The frame's w / h on the canvas swaps with the strip direction; a square frame is the same either way.
+  const SearchRes& r_init = (tr && !square) ? rv : rh;
+  if (r_init.h <= 0) return false;
+  res_out.score = r_init.score / ((double)sw * sh);
+  FrameDetection& out = res_out.det;
+  out = FrameDetection();
+  StripRead rd(fc, tr);
+  strip_band(fc, rd, r_init);
+  Rect& fr = rd.fr;
+  auto refine_tb = [&rd](Rect& r) { return refine_band_edges(rd, r); };
+  const float st_tb = refine_tb(fr);
+  const float across_px = fr.h();
+  float ppm = across_px / fg.across;     // canvas pixels per mm
+  const float L_exp = across_px * aspect;  // nominal frame length, canvas pixels
+  rd.st_tb = st_tb;
+  rd.across_px = across_px;
+  rd.ppm = ppm;
+  rd.L_exp = L_exp;
+  strip_column_profiles(rd);
+  strip_gap_lines(fc, rd);
+  std::vector<float>& cps = rd.cps;
+  cps = rd.cp;
+  smooth1d(cps, std::max(0.6f, 0.15f * ppm));
+  strip_segments(fc, rd);
+  merge_segments(fc, rd);
+  rd.format_mismatch = strip_format_mismatch(fc, rd);
+  frame_candidates(fc, rd);
+  pick_primary(fc, rd);
+  walk_neighbours(fc, rd);
+  strip_extent(fc, rd);
+  find_sprockets(fc, rd);
+  base_patches(fc, rd, res_out);
+  strip_detection(fc, rd, res_out);
+  strip_confidence(rd, res_out);
   return true;
-  };
-  if (!eval_strip(tr0, res)) return false;
+}
+
+// A second reading along the other strip axis (the comment inside), which replaces res when it has evidence of its
+// own and is the better reading; sets res.auto_conf and res.width_ok_any when it was made.
+void second_axis_reading(const FormatCtx& fc, bool tr0, FormatResult& res) {
+  const FrameDetectionParams& P = fc.P;
+  const FilmFormat fmt = fc.fmt;
+  const bool square = fc.square;
+  const int axis_ev = fc.axis_ev;
+  auto eval_strip = [&fc](bool tr, FormatResult& res_out) { return read_strip(fc, tr, res_out); };
   // A second reading along the other strip axis, unless the user gave the axis or the first reading is sure of it:
   // confident (>= 0.5) and, when the border vote named its axis (axis_ev), with a film gap found. A square frame is
   // never sure: either axis frames the same square.
@@ -2741,6 +3216,35 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       res.width_ok_any = width_ok_any;
     }
   }
+}
+
+// Steps 5a-c for one format. Allocates: the search map (sw x sh floats, gated copy, three double prefix planes)
+// and view-length profiles.
+bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& cv, const ClassInfo& ci,
+                       const FrameDetectionParams& P, FilmFormat fmt, FormatResult& res) {
+  FormatCtx fc(im, wi, cv, ci, P, fmt);
+  const FormatGeom& fg = fc.fg;
+  SearchMap S;
+  format_search_map(fc, S);
+  const float aspect = fg.along / fg.across;  // the frame's w / h with the strip along x
+  const bool square = std::fabs(fg.along - fg.across) < 1e-3f;
+  fc.aspect = aspect;
+  fc.square = square;
+  fc.rh = best_rect(S, aspect);
+  if (!square) fc.rv = best_rect(S, 1.0f / aspect);
+  const SearchRes& rh = fc.rh;
+  const SearchRes& rv = fc.rv;
+  fc.axis_ev = strip_axis_evidence(fc);
+  const int axis_ev = fc.axis_ev;
+  bool tr0;
+  if (P.axis_hint == 'h' || P.axis_hint == 'H') tr0 = false;
+  else if (P.axis_hint == 'v' || P.axis_hint == 'V') tr0 = true;
+  else if (axis_ev != 0) tr0 = axis_ev < 0;
+  else tr0 = !square && rv.score > rh.score;
+  if (tr0 && !square && rv.h <= 0) tr0 = false;
+  if (!tr0 && !square && rh.h <= 0) tr0 = true;
+  if (!read_strip(fc, tr0, res)) return false;
+  second_axis_reading(fc, tr0, res);
   return true;
 }
 
@@ -3367,6 +3871,215 @@ double clipped_share(const RgbView& sensor, const int box[4], float clip) {
   return (double)clipped / std::max(1.0, (double)box[2] * box[3]);
 }
 
+// The film base read from a capture of unexposed film (film_base_from_capture), on its half-size view.
+
+double median_of(std::vector<float>& v) {
+  if (v.empty()) return 0.0;
+  const size_t mid = v.size() / 2;
+  std::nth_element(v.begin(), v.begin() + mid, v.end());
+  double m = v[mid];
+  if (v.size() % 2 == 0) {
+    const float lo = *std::max_element(v.begin(), v.begin() + mid);
+    m = 0.5 * (m + lo);
+  }
+  return m;
+}
+
+// A region of the half-size view: each channel's median, the spread of the green density and the clipped share.
+struct RegionStats {
+  double med[3] = {0.0, 0.0, 0.0};
+  double spread = 0.0;
+  double clipped = 0.0;
+  size_t n = 0;
+};
+
+// view: the capture with the flat field, which the levels are read from. raw: the same mosaic without it, which the
+// clipping is counted on (a photosite clips at the white level as recorded, whatever the flat field then makes of it).
+RegionStats region_stats(const negicc::RgbView& view, const negicc::RgbView& raw, int x0, int y0, int w, int h,
+                         float clip) {
+  RegionStats st;
+  // At most about 4096 samples a region, on a regular lattice.
+  const int step = std::max(1, (int)std::ceil(std::sqrt((double)w * h / 4096.0)));
+  std::vector<float> ch[3];
+  size_t clipped = 0;
+  for (int y = y0; y < y0 + h; y += step) {
+    for (int x = x0; x < x0 + w; x += step) {
+      uint16_t px[3], rpx[3];
+      view.sample(x, y, px);
+      raw.sample(x, y, rpx);
+      if (rpx[0] >= clip || rpx[1] >= clip || rpx[2] >= clip) ++clipped;
+      for (int c = 0; c < 3; ++c) ch[c].push_back((float)px[c]);
+    }
+  }
+  st.n = ch[0].size();
+  if (!st.n) return st;
+  st.clipped = (double)clipped / (double)st.n;
+  std::vector<float> green = ch[1];
+  for (int c = 0; c < 3; ++c) st.med[c] = median_of(ch[c]);
+  if (st.med[1] > 0.0) {
+    std::vector<float> dev(green.size());
+    for (size_t i = 0; i < green.size(); ++i) {
+      const double g = std::max(1.0, (double)green[i]);
+      dev[i] = (float)std::fabs(std::log10(g / st.med[1]));
+    }
+    st.spread = kMadToSigma * median_of(dev);   // the MAD as a normal standard deviation
+  }
+  return st;
+}
+
+// Whether a tile's colour is the film base's: its medians through the crosstalk matrix, G/R and B/R against the
+// expected base's (step 3 of the capture in the film base detector part of negicc_core.h).
+bool base_coloured(const double med[3], const double* crosstalk, const double* expected) {
+  if (!expected || !(expected[0] > 0.0) || !(expected[1] > 0.0) || !(expected[2] > 0.0)) return true;
+  double v[3];
+  for (int r = 0; r < 3; ++r) {
+    v[r] = 0.0;
+    for (int c = 0; c < 3; ++c) v[r] += (crosstalk ? crosstalk[r * 3 + c] : (r == c ? 1.0 : 0.0)) * med[c];
+  }
+  if (!(v[0] > 0.0) || !(v[1] > 0.0) || !(v[2] > 0.0)) return false;
+  const double dg = std::log10((v[1] / v[0]) / (expected[1] / expected[0]));
+  const double db = std::log10((v[2] / v[0]) / (expected[2] / expected[0]));
+  return std::fabs(dg) <= kBaseColourTol && std::fabs(db) <= kBaseColourTol;
+}
+
+// The tiles of the window (x0, y0, w, h) of the half-size view: true with the base and the kept tiles' record when a
+// group of at least kBaseMinTiles agrees.
+bool base_from_tiles(const negicc::RgbView& view, const negicc::RgbView& raw, int x0, int y0, int w, int h, float clip,
+                     const double* crosstalk, const double* expected, FilmBaseCapture& out) {
+  struct Tile { int x, y, w, h; int i, j; RegionStats st; };
+  std::vector<Tile> tiles;
+  // Square tiles, kBaseTileGrid along the longer side and never under 8 pixels, so that a rebate strip beside a
+  // picture, far narrower than the frame, holds whole tiles.
+  const int side = std::max(8, std::max(w, h) / kBaseTileGrid);
+  const int gx = std::max(1, w / side), gy = std::max(1, h / side);
+  for (int j = 0; j < gy; ++j) {
+    for (int i = 0; i < gx; ++i) {
+      Tile t;
+      t.x = x0 + (int)((long long)w * i / gx);
+      t.y = y0 + (int)((long long)h * j / gy);
+      t.w = x0 + (int)((long long)w * (i + 1) / gx) - t.x;
+      t.h = y0 + (int)((long long)h * (j + 1) / gy) - t.y;
+      t.i = i;
+      t.j = j;
+      if (t.w < 4 || t.h < 4) continue;
+      tiles.push_back(t);
+    }
+  }
+  #pragma omp parallel for schedule(dynamic, 16)
+  for (size_t k = 0; k < tiles.size(); ++k) {
+    tiles[k].st = region_stats(view, raw, tiles[k].x, tiles[k].y, tiles[k].w, tiles[k].h, clip);
+  }
+  // The tiles that must agree: kBaseMinTiles, and at least one tile in kBaseMinShare of them.
+  const int min_tiles = std::max(kBaseMinTiles, (int)(tiles.size() / kBaseMinShare));
+  out.tiles_total = (int)tiles.size();
+  out.tiles_kept = 0;
+  // Unclipped tiles with light in every channel; then the smooth ones among them, by the median tile's spread.
+  std::vector<const Tile*> lit;
+  std::vector<float> spreads;
+  for (const Tile& t : tiles) {
+    if (t.st.n && t.st.clipped <= negicc::kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 &&
+        t.st.med[2] > 0.0) {
+      lit.push_back(&t);
+      spreads.push_back((float)t.st.spread);
+    }
+  }
+  if ((int)lit.size() < min_tiles) return false;
+  const double spread_limit = std::max(kBaseTileMaxSpread, kBaseSpreadFactor * median_of(spreads));
+  std::vector<const Tile*> smooth;
+  for (const Tile* t : lit) {
+    if (t->st.spread <= spread_limit && base_coloured(t->st.med, crosstalk, expected)) smooth.push_back(t);
+  }
+  if ((int)smooth.size() < min_tiles) return false;
+  // The brightest group: from the brightest tile down, the first with kBaseMinTiles tiles within the margin of it.
+  std::sort(smooth.begin(), smooth.end(), [](const Tile* a, const Tile* b) { return a->st.med[1] > b->st.med[1]; });
+  std::vector<const Tile*> kept;
+  for (size_t i = 0; i < smooth.size() && kept.empty(); ++i) {
+    const double ref = smooth[i]->st.med[1];
+    std::vector<const Tile*> group;
+    for (const Tile* t : smooth) {
+      if (std::fabs(std::log10(t->st.med[1] / ref)) <= kBaseTileMargin) group.push_back(t);
+    }
+    if ((int)group.size() >= min_tiles) kept = group;
+  }
+  if (kept.empty()) return false;
+  // The group was found from its brightest tile; it is taken again around its own median, so that the base is the
+  // level of that film and not of its brighter half.
+  {
+    std::vector<float> greens;
+    for (const Tile* t : kept) greens.push_back((float)t->st.med[1]);
+    const double ref = median_of(greens);
+    std::vector<const Tile*> group;
+    for (const Tile* t : smooth) {
+      if (std::fabs(std::log10(t->st.med[1] / ref)) <= kBaseTileMargin) group.push_back(t);
+    }
+    if ((int)group.size() >= min_tiles) kept = group;
+  }
+  // Film at the base's level can lie in several places (the rebate on either side of a picture, an unexposed shadow
+  // in it); the largest piece of touching tiles is one stretch of film under one part of the light, and is taken
+  // alone when it is large enough.
+  {
+    std::vector<int> label((size_t)gx * gy, -1);
+    for (const Tile* t : kept) label[(size_t)t->j * gx + t->i] = 0;
+    int pieces = 0, best = 0, best_n = 0;
+    std::vector<int> stack;
+    for (const Tile* t : kept) {
+      const int start = t->j * gx + t->i;
+      if (label[start] != 0) continue;
+      const int id = ++pieces;
+      int n = 0;
+      label[start] = id;
+      stack.push_back(start);
+      while (!stack.empty()) {
+        const int at = stack.back();
+        stack.pop_back();
+        ++n;
+        const int ai = at % gx, aj = at / gx;
+        const int next[4][2] = {{ai - 1, aj}, {ai + 1, aj}, {ai, aj - 1}, {ai, aj + 1}};
+        for (const auto& nb : next) {
+          if (nb[0] < 0 || nb[0] >= gx || nb[1] < 0 || nb[1] >= gy) continue;
+          const int q = nb[1] * gx + nb[0];
+          if (label[q] == 0) {
+            label[q] = id;
+            stack.push_back(q);
+          }
+        }
+      }
+      if (n > best_n) {
+        best_n = n;
+        best = id;
+      }
+    }
+    if (pieces > 1 && best_n >= min_tiles) {
+      std::vector<const Tile*> piece;
+      for (const Tile* t : kept) {
+        if (label[(size_t)t->j * gx + t->i] == best) piece.push_back(t);
+      }
+      kept = piece;
+    }
+  }
+  std::vector<float> ch[3];
+  int bx0 = kept[0]->x, by0 = kept[0]->y, bx1 = bx0, by1 = by0;
+  double lo = 1e30, hi = -1e30;
+  for (const Tile* t : kept) {
+    for (int c = 0; c < 3; ++c) ch[c].push_back((float)t->st.med[c]);
+    bx0 = std::min(bx0, t->x);
+    by0 = std::min(by0, t->y);
+    bx1 = std::max(bx1, t->x + t->w);
+    by1 = std::max(by1, t->y + t->h);
+    const double d = -std::log10(t->st.med[1]);
+    lo = std::min(lo, d);
+    hi = std::max(hi, d);
+  }
+  for (int c = 0; c < 3; ++c) out.decode_rgb[c] = median_of(ch[c]);
+  out.tiles_kept = (int)kept.size();
+  out.spread_density = hi - lo;
+  out.roi[0] = bx0 * 2;
+  out.roi[1] = by0 * 2;
+  out.roi[2] = (bx1 - bx0) * 2;
+  out.roi[3] = (by1 - by0) * 2;
+  return true;
+}
+
 }  // namespace
 
 static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3],
@@ -3658,6 +4371,75 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
   out.source = kFilmBaseSourceStatistics;
   std::copy(thinnest, thinnest + 3, out.decode_rgb);
   std::copy(rgb, rgb + 3, out.rgb);
+  return true;
+}
+
+bool film_base_from_capture(const RgbView& view, const RgbView& raw_view, int src_w, int src_h, float white_level,
+                            const int* roi, const double* crosstalk, const double* expected_base,
+                            const std::string& path, FilmBaseCapture& out, std::string& err) {
+  const int half_w = src_w / 2, half_h = src_h / 2;
+  const float clip = negicc::kSensorClip * white_level;
+
+  if (roi) {
+    if (roi[0] < 0 || roi[1] < 0 || roi[2] <= 0 || roi[3] <= 0 || (long long)roi[0] + roi[2] > src_w ||
+        (long long)roi[1] + roi[3] > src_h) {
+      err = "the film base region " + std::to_string(roi[0]) + "," + std::to_string(roi[1]) + "," +
+            std::to_string(roi[2]) + "," + std::to_string(roi[3]) + " is off the capture's sensor (" +
+            std::to_string(src_w) + "x" + std::to_string(src_h) + ")";
+      return false;
+    }
+    // The half-size pixels (2x2 photosites) the region touches. An odd sensor's last column or row is in none.
+    const int hx = roi[0] / 2, hy = roi[1] / 2;
+    if (hx >= half_w || hy >= half_h) {
+      err = "the film base region " + std::to_string(roi[0]) + "," + std::to_string(roi[1]) + "," +
+            std::to_string(roi[2]) + "," + std::to_string(roi[3]) + " lies on the capture's last column or row (" +
+            std::to_string(src_w) + "x" + std::to_string(src_h) + "), which the half-size decode (2x2 photosites "
+            "to a pixel) does not hold";
+      return false;
+    }
+    const int hw = std::max(1, std::min(half_w - hx, (roi[0] + roi[2] + 1) / 2 - hx));
+    const int hh = std::max(1, std::min(half_h - hy, (roi[1] + roi[3] + 1) / 2 - hy));
+    const RegionStats st = region_stats(view, raw_view, hx, hy, hw, hh, clip);
+    if (!st.n || st.med[0] <= 0.0 || st.med[1] <= 0.0 || st.med[2] <= 0.0) {
+      err = "the film base region of " + path + " holds no light";
+      return false;
+    }
+    if (st.clipped > negicc::kBaseClipFraction) {
+      err = "the film base region of " + path + " is clipped (" + std::to_string(100.0 * st.clipped) +
+            "% of its pixels): capture the film base at a shorter exposure";
+      return false;
+    }
+    for (int c = 0; c < 3; ++c) out.decode_rgb[c] = st.med[c];
+    for (int k = 0; k < 4; ++k) out.roi[k] = roi[k];
+    out.roi_source = "given";
+    out.spread_density = st.spread;
+    if (st.spread > kBaseTileMaxSpread) {
+      log_warn("the film base region of %s is not smooth (green density spread %.4f)\n", path.c_str(), st.spread);
+    }
+  } else if (base_from_tiles(view, raw_view, 0, 0, half_w, half_h, clip, crosstalk, expected_base, out)) {
+    out.roi_source = "tiles";
+  } else {
+    // The thinnest film on the capture, as a TriLED scan's base is read when it shows no rebate; on the mosaic as
+    // recorded (the same pixels before the flat field) it must not be clipped.
+    float thin[3] = {0.0f, 0.0f, 0.0f};
+    bool thin_clipped = false;
+    negicc::thinnest_film_base(view, white_level, thin, &thin_clipped);
+    if (!(thin[0] > 1.0f) || !(thin[1] > 1.0f) || !(thin[2] > 1.0f)) {
+      err = "no usable film base on " + path + " (no smooth film)";
+      return false;
+    }
+    if (thin_clipped) {
+      err = "the film base capture " + path + " is clipped: capture the film base at a shorter exposure";
+      return false;
+    }
+    log_warn("the film base capture %s has no smooth region; its thinnest film is taken\n", path.c_str());
+    for (int c = 0; c < 3; ++c) out.decode_rgb[c] = thin[c];
+    out.roi[0] = out.roi[1] = 0;
+    out.roi[2] = src_w;
+    out.roi[3] = src_h;
+    out.roi_source = "statistics";
+    out.tiles_kept = 0;
+  }
   return true;
 }
 

@@ -70,7 +70,8 @@ files, scripts, or source comments. Use relative paths instead.
   the inputs part of
   `negicc.h` and in `np_input.cc` (`RgbImage`, `read_tiff`, `read_jpeg`, `to_linear_rec2020`) and `dilate` in the
   frame detector part of `negicc_core.h`; the rest of the inputs part and `np_input.cc`, and of the frame detector
-  part and the frame detector in `film_detector.cc`, is in the global namespace.
+  part and the frame detector in `film_detector.cc`, is in the global namespace, and so are `FilmBaseCapture` and the
+  capture's tile thresholds (`kBaseTileGrid` and those after it) in the film base detector part of `negicc_core.h`.
 
 ---
 
