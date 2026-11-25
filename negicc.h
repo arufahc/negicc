@@ -13,9 +13,31 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// negicc's library: negicc_core.h, then the parts that need a third-party header (LittleCMS's lcms2.h, LibRaw's
-// libraw/libraw.h), in this order (each needs only those before it): the white-light balance, neg_process's
-// inputs, the profile bundle, the DINOv3 intent model with the Auto search, and the conversion parameter search.
+// Two things, one after the other:
+//
+//   1. negicc's library: negicc_core.h, then the parts that need a third-party header (LittleCMS's lcms2.h, LibRaw's
+//      libraw/libraw.h), in this order (each needs only those before it): the white-light balance, neg_process's
+//      inputs, the profile bundle, the DINOv3 intent model with the Auto search, and the conversion parameter search.
+//      The library's sources (libnegicc_dinov3.a) and the companion application's own sources use only this part.
+//   2. neg_process's own declarations, from the banner "neg_process's own declarations" to the end: what its program
+//      sources (neg_process.cc, np_input.cc, print_emulation.cc, np_output.cc and pipeline.cc) share, in this order:
+//      the print, the film base, the options, the output and the pipeline.
+//
+// Contents, each part under a banner with its name:
+//
+//   White-light balance      the film-base balance of the white-light decode
+//   Inputs                   geometry, RAW decoding, TIFF and JPEG files, the inputs besides one RAW
+//   Profile bundle           the film profile as the host holds it, the bundles and their brackets, the profiles, the
+//                            input matrix and the shoulder
+//   DINOv3                   the intent model and the Auto search that runs on it
+//   Parameter search         the conversion parameter search, its renderers, the curve fit and the tone stage's plan
+//   ---- neg_process's own declarations ----
+//   Print                    the density output's encoding and record, the print materials, a frame's print and its
+//                            CLF, and the print ICC
+//   Film base                the film base read from a capture of unexposed film
+//   Options                  the command line
+//   Output                   the picture's TIFF, the density file (TIFF or DPX) and its print CLFs, and the sidecar
+//   Pipeline                 the stages main runs in turn and the state they hand on
 
 #ifndef NEGICC_H
 #define NEGICC_H
@@ -2017,6 +2039,15 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                          int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
 
+// ####################################################################################################################
+// neg_process's own declarations
+// ####################################################################################################################
+//
+// The library's interface ends above. From here to the end are the declarations neg_process's program sources share
+// (neg_process.cc, np_input.cc, print_emulation.cc, np_output.cc and pipeline.cc): the print, the film base, the
+// options, the output and the pipeline. The library's sources and the companion application's own sources use none
+// of them. They are in the global namespace, so their names reach every source that includes this header.
+
 // ====================================================================================================================
 // Print: declarations
 // ====================================================================================================================
@@ -2134,23 +2165,6 @@ std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
 // of what g and b do to the density is offset + mean in every channel: the zero-sum part is the colour, the mean is
 // level. False, and zeros, when the record has no balance.
 bool density_balance_offset(const DensityRecord& rec, double offset[3], double* mean = nullptr);
-
-struct DensityFileInfo {
-  std::string make, model;            // the camera
-  std::string software;               // "neg_process <version>"
-  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
-};
-
-// Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
-// description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
-// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
-// user-defined data. 0 on success.
-int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                       const std::string& description, const DensityFileInfo& info);
-int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
-                      const DensityFileInfo& info);
-
 
 // ---- The print of a density file ------------------------------------------------------------------------------------
 //
@@ -2304,9 +2318,6 @@ struct DensityPrints {
 // measure and channel factors).
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids);
-// Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
-int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
-void remove_print_clfs(const DensityPrints& prints);
 
 // ---- The print ICC: a frame printed as the picture conversion renders it --------------------------------------------
 //
@@ -2611,12 +2622,34 @@ struct Options {
 // Output: declarations
 // ====================================================================================================================
 
-// neg_process's output: the 16-bit TIFF with its ICC profile, and the JSON sidecar beside it.
+// neg_process's output: the picture's 16-bit TIFF with its ICC profile, the density file (a 16-bit TIFF or a 10-bit
+// DPX) with its print CLFs, and the JSON sidecar beside the output. Their code is np_output.cc.
 
 // Writes proc's image (or rgb3, 3 samples a pixel, in its place) as a 16-bit TIFF to output with the ICC profile
 // attach_profile names ("srgb", "srgb-g10" or a file) or, when that is empty, embedded_icc. 0 on success.
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
                const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
+
+struct DensityFileInfo {
+  std::string make, model;            // the camera
+  std::string software;               // "neg_process <version>"
+  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
+};
+
+// Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
+// description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
+// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
+// user-defined data. 0 on success.
+int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                       const std::string& description, const DensityFileInfo& info);
+int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
+                      const DensityFileInfo& info);
+
+// Writes the print CLFs of a density file (density_prints, the print part). 0 on success; a CLF that cannot be
+// written removes those written before it and returns 1.
+int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
+void remove_print_clfs(const DensityPrints& prints);
 
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
