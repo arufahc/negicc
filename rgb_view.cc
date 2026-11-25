@@ -306,8 +306,9 @@ RgbView RgbView::crop_and_orient(int rx, int ry, int rw, int rh, int rot_cw, boo
     if (!valid() || rw <= 0 || rh <= 0) return {};
     const int x0 = std::max(0, rx);
     const int y0 = std::max(0, ry);
-    const int x1 = std::min(width, rx + rw);
-    const int y1 = std::min(height, ry + rh);
+    // The right and bottom edges are summed in 64 bits: rx + rw (or ry + rh) can pass INT_MAX.
+    const int x1 = (int)std::min<long long>(width, (long long)rx + rw);
+    const int y1 = (int)std::min<long long>(height, (long long)ry + rh);
     if (x1 <= x0 || y1 <= y0) return {};
     rx = x0;
     ry = y0;
