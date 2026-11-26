@@ -200,13 +200,6 @@ else from the thinnest film ([The film base](#the-film-base)). That base also ta
 camera works ([The light](#the-light)). [Scans from other cameras](#scans-from-other-cameras) shows single scans
 before and after.
 
-![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
-
-*Three forum scans, credited under [Scans from other cameras](#scans-from-other-cameras). Left to right: scene
-colour matching, the print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it
-(`--film_stock portra400 --light_source d65 --roi auto -P srgb`, with `--print kodak_portra_endura` and
-`--print kodak_2383`). Rendered with negicc `2130afd`.*
-
 ### Choosing exposure and colour
 
 The profiles describe the film. They do not know how bright a particular picture should be or what its colour
